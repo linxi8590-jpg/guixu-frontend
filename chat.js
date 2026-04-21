@@ -3335,107 +3335,178 @@ ${modelDescriptions}
           body.tools = formattedTools;
         }
         
-        const resp = await fetchWithTimeout(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body)
-        }, 60000);
-        
-        if (!resp.ok) {
-          const errText = await resp.text().catch(() => '');
-          throw new Error("Gemini API 错误: " + resp.status + " " + errText.slice(0, 200));
-        }
-        response = await resp.json();
-        console.log(`[Gemini调试] 响应收到，迭代次数: ${iterationCount}`);
-        
-        const candidate = response.candidates?.[0];
-        const parts = candidate?.content?.parts || [];
-        const finishReason = candidate?.finishReason;
-        
-        console.log(`[Gemini调试] finishReason: ${finishReason}, parts数量: ${parts.length}`);
-        console.log(`[Gemini调试] parts类型:`, parts.map(p => Object.keys(p)).join(', '));
-        
-        // 检查是否被安全过滤
-        if (finishReason === "PROHIBITED_CONTENT") {
-          finalText = "[Gemini 安全过滤] 模型拒绝生成此内容，可能触发了敏感词检测。试试换个说法或新开对话。";
-          break;
-        }
-        if (finishReason === "SAFETY") {
-          finalText = "[Gemini 安全过滤] 内容被安全系统拦截。";
-          break;
-        }
-        
-        // Gemini 工具调用格式错误（它自己生成的格式不对）
-        if (finishReason === "MALFORMED_FUNCTION_CALL") {
-          console.log(`[Gemini调试] 工具调用格式错误，尝试禁用工具重试`);
-          // 给用户友好提示，建议换模型
-          finalText = "[Gemini 错误] 工具调用格式异常，Gemini 生成的调用格式不正确。建议使用 Claude 或 GPT 进行工具调用。";
-          break;
-        }
-        
-        // 检查是否有函数调用
-        const functionCallPart = parts.find(p => p.functionCall);
-        if (functionCallPart) {
-          const fc = functionCallPart.functionCall;
-          updateStreamingMessage(assistantMsgId, `🔧 正在调用: ${fc.name}...`);
+        // 尝试流式工具调用，失败则降级为非流式
+        try {
+          const streamUrl = buildGeminiUrl(baseUrl, model, "streamGenerateContent") + "?alt=sse&key=" + apiKey;
           
-          // 保存完整的 parts（Gemini 3.x 需要 thought_signature）
-          conversationMessages.push({
-            role: "assistant",
-            content: "",
-            functionCall: fc,
-            _geminiParts: parts
+          const resp = await fetchWithTimeout(streamUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+          }, 30000);
+          
+          if (!resp.ok) {
+            const errText = await resp.text().catch(() => '');
+            throw new Error("Gemini API 错误: " + resp.status + " " + errText.slice(0, 200));
+          }
+          
+          let partialTextGem = finalText;
+          const streamResultGem = await parseGeminiStreamWithTools(resp, (chunk) => {
+            partialTextGem += chunk;
+            updateStreamingMessage(assistantMsgId, partialTextGem);
           });
           
-          const toolResult = await executeTool(fc.name, fc.args || {});
-          console.log(`[工具调试] 工具 ${fc.name} 执行完成，结果长度: ${toolResult?.length || 0}`);
-          console.log(`[工具调试] 结果预览:`, (toolResult || '').slice(0, 200));
+          console.log(`[Gemini流式] finishReason: ${streamResultGem.finishReason}, parts: ${streamResultGem.allParts.length}, functionCalls: ${streamResultGem.functionCalls.length}`);
           
-          // 保存工具结果，以便在空响应时使用
-          lastToolResult = toolResult;
-          lastToolName = fc.name;
+          // 累计 token
+          if (streamResultGem.usage) {
+            totalUsage.promptTokens += streamResultGem.usage.promptTokens || 0;
+            totalUsage.completionTokens += streamResultGem.usage.completionTokens || 0;
+            totalUsage.totalTokens += streamResultGem.usage.totalTokens || 0;
+          }
           
-          conversationMessages.push({
-            role: "function",
-            content: toolResult,
-            functionResponse: {
-              name: fc.name,
-              response: { result: toolResult }
+          // 提取思考内容
+          if (streamResultGem.thinking) {
+            finalThinking += streamResultGem.thinking;
+          }
+          
+          // 检查 Gemini 代理注入的错误
+          if (streamResultGem.geminiError) {
+            finalText = "[Gemini 错误] " + streamResultGem.geminiError;
+            break;
+          }
+          
+          // 检查安全过滤
+          if (streamResultGem.finishReason === "PROHIBITED_CONTENT") {
+            finalText = "[Gemini 安全过滤] 模型拒绝生成此内容，可能触发了敏感词检测。试试换个说法或新开对话。";
+            break;
+          }
+          if (streamResultGem.finishReason === "SAFETY") {
+            finalText = "[Gemini 安全过滤] 内容被安全系统拦截。";
+            break;
+          }
+          if (streamResultGem.finishReason === "MALFORMED_FUNCTION_CALL") {
+            finalText = "[Gemini 错误] 工具调用格式异常，Gemini 生成的调用格式不正确。建议使用 Claude 或 GPT 进行工具调用。";
+            break;
+          }
+          
+          // 检查是否有函数调用
+          if (streamResultGem.functionCalls.length > 0) {
+            const fc = streamResultGem.functionCalls[0];  // Gemini 每次只调一个
+            setStatus(`🔧 调用: ${fc.name}`);
+            updateStreamingMessage(assistantMsgId, partialTextGem + (partialTextGem ? "\n\n" : "") + `🔧 正在调用: ${fc.name}...`);
+            
+            // 保存完整的 parts（Gemini 3.x 需要 thought_signature）
+            conversationMessages.push({
+              role: "assistant",
+              content: "",
+              functionCall: fc,
+              _geminiParts: streamResultGem.allParts
+            });
+            
+            const toolResult = await executeTool(fc.name, fc.args || {});
+            console.log(`[Gemini流式] 工具 ${fc.name} 执行完成，结果长度: ${toolResult?.length || 0}`);
+            
+            lastToolResult = toolResult;
+            lastToolName = fc.name;
+            
+            conversationMessages.push({
+              role: "function",
+              content: toolResult,
+              functionResponse: {
+                name: fc.name,
+                response: { result: toolResult }
+              }
+            });
+            
+            finalText = partialTextGem;
+            continue;
+          }
+          
+          // 没有函数调用，返回最终文本
+          finalText = partialTextGem;
+          
+          if (!finalText && lastToolResult) {
+            console.log(`[Gemini流式] 模型返回空文本，使用工具结果作为回复`);
+            if (lastToolName?.includes('save_memory') || lastToolName?.includes('search_memory')) {
+              finalText = lastToolResult;
+            } else {
+              finalText = `✓ ${lastToolResult}`;
             }
-          });
-          console.log(`[工具调试] 已添加工具结果到消息列表，准备发送第${iterationCount + 1}次请求`);
-          
-          continue;
-        }
-        
-        // 检查 Gemini 错误
-        if (response._geminiError) {
-          finalText = "[Gemini 错误] " + response._geminiError;
+          }
           break;
-        }
-        
-        // 提取 thinking 内容（用于显示）- 暂时注释掉，需要确认 Gemini 3.x 的格式
-        // const thinkingParts = parts.filter(p => p.text && (p.thought || p.thinking));
-        // if (thinkingParts.length > 0) {
-        //   finalThinking = thinkingParts.map(p => p.text).join("");
-        // }
-        
-        // 提取文本
-        finalText = parts
-          .filter(p => p.text)
-          .map(p => p.text)
-          .join("");
-        
-        // 如果文本为空但之前有工具调用，用工具结果构造回复
-        if (!finalText && lastToolResult) {
-          console.log(`[Gemini调试] 模型返回空文本，使用工具结果作为回复`);
-          // 对于常见的记忆工具，给出友好的确认
-          if (lastToolName && lastToolName.includes('save_memory')) {
-            finalText = lastToolResult;  // save_memory 已返回友好文本
-          } else if (lastToolName && lastToolName.includes('search_memory')) {
-            finalText = lastToolResult;
-          } else {
-            finalText = `✓ ${lastToolResult}`;
+          
+        } catch (streamErrGem) {
+          console.warn("[Gemini] 流式工具调用失败，降级为非流式:", streamErrGem.message);
+          
+          // 降级：非流式请求
+          const fallbackUrl = buildGeminiUrl(baseUrl, model, "generateContent") + "?key=" + apiKey;
+          const resp = await fetchWithTimeout(fallbackUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+          }, 60000);
+          
+          if (!resp.ok) {
+            const errText = await resp.text().catch(() => '');
+            throw new Error("Gemini API 错误: " + resp.status + " " + errText.slice(0, 200));
+          }
+          response = await resp.json();
+          
+          const candidate = response.candidates?.[0];
+          const parts = candidate?.content?.parts || [];
+          const finishReason = candidate?.finishReason;
+          
+          if (finishReason === "PROHIBITED_CONTENT") {
+            finalText = "[Gemini 安全过滤] 模型拒绝生成此内容。";
+            break;
+          }
+          if (finishReason === "SAFETY") {
+            finalText = "[Gemini 安全过滤] 内容被安全系统拦截。";
+            break;
+          }
+          if (finishReason === "MALFORMED_FUNCTION_CALL") {
+            finalText = "[Gemini 错误] 工具调用格式异常。";
+            break;
+          }
+          
+          const functionCallPart = parts.find(p => p.functionCall);
+          if (functionCallPart) {
+            const fc = functionCallPart.functionCall;
+            updateStreamingMessage(assistantMsgId, `🔧 正在调用: ${fc.name}...`);
+            
+            conversationMessages.push({
+              role: "assistant",
+              content: "",
+              functionCall: fc,
+              _geminiParts: parts
+            });
+            
+            const toolResult = await executeTool(fc.name, fc.args || {});
+            lastToolResult = toolResult;
+            lastToolName = fc.name;
+            
+            conversationMessages.push({
+              role: "function",
+              content: toolResult,
+              functionResponse: { name: fc.name, response: { result: toolResult } }
+            });
+            continue;
+          }
+          
+          if (response._geminiError) {
+            finalText = "[Gemini 错误] " + response._geminiError;
+            break;
+          }
+          
+          finalText = parts.filter(p => p.text).map(p => p.text).join("");
+          
+          if (!finalText && lastToolResult) {
+            if (lastToolName?.includes('save_memory') || lastToolName?.includes('search_memory')) {
+              finalText = lastToolResult;
+            } else {
+              finalText = `✓ ${lastToolResult}`;
+            }
           }
         }
         break;
@@ -4249,6 +4320,84 @@ ${modelDescriptions}
     }
     
     return { text: fullText, toolUseBlocks, usage, thinking, stopReason };
+  }
+
+
+  // Gemini 流式解析（支持函数调用 + thought_signature）
+  async function parseGeminiStreamWithTools(resp, onTextChunk) {
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let fullText = "";
+    let usage = null;
+    let thinking = "";
+    let finishReason = null;
+    let geminiError = null;
+    
+    // 收集所有 parts（保留 thought_signature 等元数据）
+    const allParts = [];
+    const functionCalls = [];
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const data = line.slice(6);
+        if (!data.trim()) continue;
+        
+        try {
+          const json = JSON.parse(data);
+          
+          // 错误处理（代理注入的 _geminiError）
+          if (json._geminiError) {
+            geminiError = json._geminiError;
+          }
+          
+          const candidate = json.candidates?.[0];
+          if (candidate) {
+            const parts = candidate.content?.parts || [];
+            
+            for (const part of parts) {
+              allParts.push(part);
+              
+              if (part.text) {
+                // thought 标记的是思考内容
+                if (part.thought) {
+                  thinking += part.text;
+                } else {
+                  fullText += part.text;
+                  onTextChunk(part.text);
+                }
+              }
+              
+              if (part.functionCall) {
+                functionCalls.push(part.functionCall);
+              }
+            }
+            
+            if (candidate.finishReason) {
+              finishReason = candidate.finishReason;
+            }
+          }
+          
+          if (json.usageMetadata) {
+            usage = {
+              promptTokens: json.usageMetadata.promptTokenCount || 0,
+              completionTokens: json.usageMetadata.candidatesTokenCount || 0,
+              totalTokens: (json.usageMetadata.promptTokenCount || 0) + (json.usageMetadata.candidatesTokenCount || 0),
+            };
+          }
+        } catch (e) {}
+      }
+    }
+    
+    return { text: fullText, functionCalls, allParts, usage, thinking, finishReason, geminiError };
   }
 
   // 处理 OpenAI 流式响应
