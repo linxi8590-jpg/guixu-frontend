@@ -3109,96 +3109,170 @@ ${modelDescriptions}
           body.tool_choice = "auto";
         }
         
-        // 流式请求（解决超时问题）
-        body.stream = true;
-        
-        const resp = await fetchWithTimeout(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer " + apiKey
-          },
-          body: JSON.stringify(body)
-        }, 30000);
-        
-        if (!resp.ok) {
-          const errText = await resp.text();
-          console.error("OpenAI API 错误:", resp.status, errText);
-          throw new Error("API 错误: " + resp.status + " - " + errText.slice(0, 200));
-        }
-        
-        let partialTextOai = finalText;
-        const streamResultOai = await parseOpenAIStreamWithTools(resp, (chunk) => {
-          partialTextOai += chunk;
-          updateStreamingMessage(assistantMsgId, partialTextOai);
-        });
-        
-        // 累计 token
-        if (streamResultOai.usage) {
-          totalUsage.promptTokens += streamResultOai.usage.promptTokens || 0;
-          totalUsage.completionTokens += streamResultOai.usage.completionTokens || 0;
-          totalUsage.totalTokens += streamResultOai.usage.totalTokens || 0;
-        }
-        
-        // 提取思考内容（GPT-5 reasoning_content）
-        if (streamResultOai.thinking) {
-          finalThinking += streamResultOai.thinking;
-          console.log(`[OpenAI Thinking] 流式提取思考内容，长度: ${streamResultOai.thinking.length}`);
-        }
-        
-        // 检查是否有工具调用
-        if (streamResultOai.toolCalls.length > 0) {
-          const toolNames = streamResultOai.toolCalls.map(tc => tc.name).join(", ");
-          setStatus(`🔧 调用: ${toolNames}`);
-          updateStreamingMessage(assistantMsgId, partialTextOai + (partialTextOai ? "\n\n" : "") + `🔧 正在调用: ${toolNames}...`);
+        // 尝试流式工具调用，失败则降级为非流式
+        let oaiStreamOk = false;
+        try {
+          body.stream = true;
           
-          // 构建 OpenAI 格式的工具调用消息
-          const assistantToolCalls = streamResultOai.toolCalls.map((tc, i) => ({
-            id: tc.id || `call_${Date.now()}_${i}`,
-            type: "function",
-            function: { name: tc.name, arguments: tc.arguments }
-          }));
+          const resp = await fetchWithTimeout(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer " + apiKey
+            },
+            body: JSON.stringify(body)
+          }, 30000);
           
-          conversationMessages.push({
-            role: "assistant",
-            content: streamResultOai.text || null,
-            tool_calls: assistantToolCalls
+          if (!resp.ok) {
+            const errText = await resp.text();
+            throw new Error("API 错误: " + resp.status + " - " + errText.slice(0, 200));
+          }
+          
+          let partialTextOai = finalText;
+          const streamResultOai = await parseOpenAIStreamWithTools(resp, (chunk) => {
+            partialTextOai += chunk;
+            updateStreamingMessage(assistantMsgId, partialTextOai);
           });
           
-          for (const tc of assistantToolCalls) {
-            const toolName = tc.function.name;
-            let toolArgs = {};
-            try { toolArgs = JSON.parse(tc.function.arguments || "{}"); } catch(e) {}
-            const toolResult = await executeTool(toolName, toolArgs);
-            console.log(`[OpenAI流式] 工具 ${toolName} 执行完成`);
-            
-            lastToolResult = toolResult;
-            lastToolName = toolName;
-            
-            conversationMessages.push({
-              role: "tool",
-              tool_call_id: tc.id,
-              content: toolResult
-            });
+          // 累计 token
+          if (streamResultOai.usage) {
+            totalUsage.promptTokens += streamResultOai.usage.promptTokens || 0;
+            totalUsage.completionTokens += streamResultOai.usage.completionTokens || 0;
+            totalUsage.totalTokens += streamResultOai.usage.totalTokens || 0;
           }
           
-          // 保留已输出的文本
-          finalText = partialTextOai;
-          continue;
-        }
-        
-        // 没有工具调用，返回最终文本
-        finalText = partialTextOai;
-        
-        if (!finalText && lastToolResult) {
-          console.log(`[OpenAI流式] 模型返回空文本，使用工具结果作为回复`);
-          if (lastToolName?.includes('save_memory') || lastToolName?.includes('search_memory')) {
-            finalText = lastToolResult;
-          } else {
-            finalText = `✓ ${lastToolResult}`;
+          // 提取思考内容（GPT-5 reasoning_content）
+          if (streamResultOai.thinking) {
+            finalThinking += streamResultOai.thinking;
+            console.log(`[OpenAI Thinking] 流式提取思考内容，长度: ${streamResultOai.thinking.length}`);
           }
+          
+          // 检查是否有工具调用
+          if (streamResultOai.toolCalls.length > 0) {
+            const toolNames = streamResultOai.toolCalls.map(tc => tc.name).join(", ");
+            setStatus(`🔧 调用: ${toolNames}`);
+            updateStreamingMessage(assistantMsgId, partialTextOai + (partialTextOai ? "\n\n" : "") + `🔧 正在调用: ${toolNames}...`);
+            
+            const assistantToolCalls = streamResultOai.toolCalls.map((tc, i) => ({
+              id: tc.id || `call_${Date.now()}_${i}`,
+              type: "function",
+              function: { name: tc.name, arguments: tc.arguments }
+            }));
+            
+            conversationMessages.push({
+              role: "assistant",
+              content: streamResultOai.text || null,
+              tool_calls: assistantToolCalls
+            });
+            
+            for (const tc of assistantToolCalls) {
+              const toolName = tc.function.name;
+              let toolArgs = {};
+              try { toolArgs = JSON.parse(tc.function.arguments || "{}"); } catch(e) {}
+              const toolResult = await executeTool(toolName, toolArgs);
+              console.log(`[OpenAI流式] 工具 ${toolName} 执行完成`);
+              
+              lastToolResult = toolResult;
+              lastToolName = toolName;
+              
+              conversationMessages.push({
+                role: "tool",
+                tool_call_id: tc.id,
+                content: toolResult
+              });
+            }
+            
+            finalText = partialTextOai;
+            oaiStreamOk = true;
+            continue;
+          }
+          
+          // 没有工具调用
+          finalText = partialTextOai;
+          
+          if (!finalText && lastToolResult) {
+            if (lastToolName?.includes('save_memory') || lastToolName?.includes('search_memory')) {
+              finalText = lastToolResult;
+            } else {
+              finalText = `✓ ${lastToolResult}`;
+            }
+          }
+          oaiStreamOk = true;
+          break;
+          
+        } catch (streamErr) {
+          console.warn("[OpenAI] 流式工具调用失败，降级为非流式:", streamErr.message);
+          
+          // 降级: 非流式请求
+          delete body.stream;
+          const resp2 = await fetchWithTimeout(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer " + apiKey
+            },
+            body: JSON.stringify(body)
+          }, 120000);
+          
+          if (!resp2.ok) {
+            const errText2 = await resp2.text();
+            throw new Error("API 错误: " + resp2.status + " - " + errText2.slice(0, 200));
+          }
+          response = await resp2.json();
+          
+          const choice = response.choices[0];
+          const message = choice.message;
+          
+          if (response.usage) {
+            totalUsage.promptTokens += response.usage.prompt_tokens || 0;
+            totalUsage.completionTokens += response.usage.completion_tokens || 0;
+            totalUsage.totalTokens += response.usage.total_tokens || 0;
+          }
+          
+          if (message.tool_calls && message.tool_calls.length > 0) {
+            const toolNames = message.tool_calls.map(tc => tc.function.name).join(", ");
+            updateStreamingMessage(assistantMsgId, `🔧 正在调用: ${toolNames}...`);
+            
+            conversationMessages.push({
+              role: "assistant",
+              content: message.content || "",
+              tool_calls: message.tool_calls
+            });
+            
+            for (const toolCall of message.tool_calls) {
+              const toolName = toolCall.function.name;
+              let toolArgs = {};
+              try { toolArgs = JSON.parse(toolCall.function.arguments || "{}"); } catch(e) {}
+              const toolResult = await executeTool(toolName, toolArgs);
+              console.log(`[OpenAI非流式] 工具 ${toolName} 执行完成`);
+              
+              lastToolResult = toolResult;
+              lastToolName = toolName;
+              
+              conversationMessages.push({
+                role: "tool",
+                tool_call_id: toolCall.id,
+                content: toolResult
+              });
+            }
+            continue;
+          }
+          
+          finalText = message.content || "";
+          
+          if (message.reasoning_content) {
+            finalThinking = message.reasoning_content;
+          }
+          
+          if (!finalText && lastToolResult) {
+            if (lastToolName?.includes('save_memory') || lastToolName?.includes('search_memory')) {
+              finalText = lastToolResult;
+            } else {
+              finalText = `✓ ${lastToolResult}`;
+            }
+          }
+          break;
         }
-        break;
       }
       
       // Gemini 格式
