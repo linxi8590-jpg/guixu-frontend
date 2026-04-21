@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>归墟 · 设置</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600&family=Noto+Serif+SC:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <meta name="theme-color" content="#09090b">
+</head>
+<body>
+  <header class="top-nav">
+    <div class="top-nav-left">
+      <span class="app-logo">归墟</span>
+      <span class="top-nav-page">记忆</span>
+    </div>
+    <nav class="top-nav-links">
+      <a href="index.html">聊天</a>
+      <a href="connections.html">连接</a>
+      <a href="memory.html" class="active">记忆</a>
+      <a href="data.html">数据</a>
+    </nav>
+  </header>
+
+  <div class="settings-page">
+    <header class="settings-header">
+      <h1>自定义指令 & 跨窗口记忆</h1>
+      <p>这里写全局指令、管理每个会话的摘要，以后可以做成真正的“跨窗口大脑”。</p>
+    </header>
+
+    <section class="settings-body narrow">
+      <label class="field">
+        <span>全局自定义指令（所有请求都会带上）</span>
+        <textarea id="globalInstructionInput" rows="4" placeholder="例如：你是我的专属助手，说话风格偏轻松、有一点嘴碎。"></textarea>
+      </label>
+
+      <hr class="settings-separator">
+
+      <div class="field">
+        <span>🤖 自动记忆</span>
+        <p class="field-hint">开启后，AI 会自动从对话中提取值得记住的信息，无需手动添加。</p>
+      </div>
+
+      <div class="field">
+        <label class="toggle-row">
+          <input type="checkbox" id="autoMemoryEnabled">
+          <span>开启自动记忆提取</span>
+        </label>
+      </div>
+
+      <div class="field" id="autoMemoryIntervalField" style="display: none;">
+        <div class="slider-label-row">
+          <span>提取频率（每隔几轮对话）</span>
+          <span class="slider-value" id="autoMemoryIntervalValue">3</span>
+        </div>
+        <input id="autoMemoryIntervalSlider" type="range" min="5" max="50" step="5">
+        <p class="field-hint">数字越小提取越频繁，但也会消耗更多 token。</p>
+        
+        <div class="field" style="margin-top: 0.5rem;">
+          <span>提取用的连接</span>
+          <select id="autoMemoryConnectionSelect" style="width: 100%; padding: 0.5rem; margin-top: 0.3rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-primary);">
+            <option value="">跟随当前对话</option>
+          </select>
+        </div>
+        <div class="field" style="margin-top: 0.3rem;">
+          <span>提取用的模型（可选）</span>
+          <input type="text" id="autoMemoryModelInput" placeholder="留空则用连接的默认模型" style="width: 100%; padding: 0.5rem; margin-top: 0.3rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-primary);">
+        </div>
+      </div>
+
+      <hr class="settings-separator">
+
+      <div class="field">
+        <span>🌐 服务器记忆</span>
+        <p class="field-hint">
+          跨窗口、跨设备的持久记忆。需要配置你自己的服务器地址。<br>
+          AI 会自动提取对话中的重要信息，并在新对话中自然地回忆起来。
+        </p>
+      </div>
+
+      <div class="field">
+        <label class="toggle-row">
+          <input type="checkbox" id="serverMemoryEnabled">
+          <span>开启服务器记忆</span>
+        </label>
+      </div>
+
+      <div id="serverMemorySection" style="display: none;">
+        <label class="field">
+          <span>服务器地址</span>
+          <input type="text" id="serverMemoryUrl" placeholder="例如: https://api.777903.xyz">
+          <p class="field-hint">填写你的 API 服务器地址（不要加末尾斜杠）</p>
+        </label>
+        
+        <label class="field">
+          <span>访问密钥</span>
+          <input type="password" id="serverMemoryToken" placeholder="输入服务器密钥">
+          <p class="field-hint">用于验证身份，只有密钥正确才能访问记忆</p>
+        </label>
+        
+        <div class="field slider-field">
+          <div class="slider-label-row">
+            <span>提取频率（每 N 轮提取一次）</span>
+            <span class="slider-value" id="serverMemoryIntervalValue">5</span>
+          </div>
+          <input id="serverMemoryIntervalSlider" type="range" min="10" max="100" step="5">
+        </div>
+        
+        <div class="field" style="margin-top: 0.5rem;">
+          <span>提取用的连接</span>
+          <select id="serverMemoryConnectionSelect" style="width: 100%; padding: 0.5rem; margin-top: 0.3rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-primary);">
+            <option value="">跟随当前对话</option>
+          </select>
+        </div>
+        <div class="field" style="margin-top: 0.3rem;">
+          <span>提取用的模型（可选）</span>
+          <input type="text" id="serverMemoryModelInput" placeholder="留空则用连接的默认模型" style="width: 100%; padding: 0.5rem; margin-top: 0.3rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-primary);">
+        </div>
+        
+        <div class="editor-buttons" style="justify-content: flex-start; margin-bottom: 1rem; gap: 0.5rem;">
+          <button id="viewServerMemoriesBtn" class="secondary-button">📋 查看所有记忆</button>
+          <button id="addServerMemoryBtn" class="secondary-button">➕ 手动添加</button>
+        </div>
+        
+        <div id="serverMemoryFilters" class="memory-filters" style="display: none;">
+          <button class="filter-chip active" data-filter="all">全部</button>
+          <button class="filter-chip" data-filter="pinned">📌 钉选</button>
+          <button class="filter-chip" data-filter="feel">💭 感受</button>
+          <button class="filter-chip" data-filter="fact">事实</button>
+          <button class="filter-chip" data-filter="preference">偏好</button>
+          <button class="filter-chip" data-filter="experience">经历</button>
+          <button class="filter-chip" data-filter="relationship">关系</button>
+          <button class="filter-chip" data-filter="other">其他</button>
+        </div>
+        
+        <div id="serverMemoriesList" class="memory-items-list" style="display: none;">
+          <div class="empty-text">点击上方按钮查看记忆</div>
+        </div>
+      </div>
+
+      <hr class="settings-separator">
+
+      <div class="field">
+        <span>💬 主动消息</span>
+        <p class="field-hint">
+          让 AI 在合适的时机主动找你聊天，不用你先开口。<br>
+          ⚠️ 需要网页保持打开状态才能触发。
+        </p>
+      </div>
+
+      <div class="field">
+        <label class="toggle-row">
+          <input type="checkbox" id="proactiveEnabled">
+          <span>开启主动消息</span>
+        </label>
+      </div>
+
+      <div id="proactiveSection" style="display: none;">
+        <label class="field">
+          <span>触发窗口</span>
+          <select id="proactiveTargetChat">
+            <option value="">当前活跃窗口</option>
+          </select>
+          <p class="field-hint">选择 AI 主动发消息的窗口</p>
+        </label>
+
+        <div class="field">
+          <span style="font-weight: 500;">触发模式</span>
+        </div>
+
+        <div class="field" style="padding-left: 1rem;">
+          <label class="toggle-row">
+            <input type="checkbox" id="proactiveIdleEnabled">
+            <span>⏰ 空闲触发</span>
+          </label>
+          <div id="proactiveIdleConfig" style="display: none; margin-top: 0.5rem;">
+            <div class="slider-field">
+              <div class="slider-label-row">
+                <span>空闲多久触发（分钟）</span>
+                <span class="slider-value" id="proactiveIdleValue">30</span>
+              </div>
+              <input id="proactiveIdleSlider" type="range" min="5" max="120" step="5">
+            </div>
+          </div>
+        </div>
+
+        <div class="field" style="padding-left: 1rem; margin-top: 0.5rem;">
+          <p class="field-hint">💡 AI还可以用 set_reminder 工具自主设置提醒（一次性或每日重复）</p>
+        </div>
+
+        <label class="field" style="margin-top: 1rem;">
+          <span>触发提示词</span>
+          <textarea id="proactivePrompts" rows="4" placeholder="每行一个提示词，触发时随机选一个"></textarea>
+          <p class="field-hint">AI 收到提示后会自己决定说什么</p>
+        </label>
+        
+        <div class="field" style="margin-top: 1rem;">
+          <label class="toggle-row">
+            <input type="checkbox" id="dndEnabled">
+            <span>🌙 免打扰时段</span>
+          </label>
+          <div id="dndConfig" style="display: none; margin-top: 0.5rem;">
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <input type="time" id="dndStart" value="23:00" style="flex: 1;">
+              <span>至</span>
+              <input type="time" id="dndEnd" value="07:00" style="flex: 1;">
+            </div>
+            <p class="field-hint">这个时间段内不会触发任何主动消息</p>
+          </div>
+        </div>
+        
+        <div class="field" style="margin-top: 1rem;">
+          <span>📋 AI设置的提醒</span>
+          <div id="taskQueueList" style="margin-top: 0.5rem;">
+            <div class="empty-text" style="font-size: 0.85rem;">暂无提醒任务</div>
+          </div>
+          <button type="button" id="refreshTasksBtn" class="small-button" style="margin-top: 0.5rem;">刷新列表</button>
+        </div>
+      </div>
+
+      <hr class="settings-separator">
+
+      <div class="field">
+        <span>📝 记忆条目（传统）</span>
+        <p class="field-hint">一条条添加你希望AI记住的信息，可以随时编辑、删除、开关。发请求时会自动拼到提示词里。</p>
+      </div>
+
+      <div id="memoryItemsList" class="memory-items-list">
+        <div class="empty-text">还没有记忆条目，点下方按钮添加。</div>
+      </div>
+
+      <div class="editor-buttons" style="justify-content: flex-start; margin-bottom: 1.5rem;">
+        <button id="addMemoryItemButton" class="secondary-button">➕ 添加记忆</button>
+      </div>
+
+      <hr class="settings-separator">
+
+      <div class="field">
+        <span>生成参数（全局，对所有模型生效）</span>
+        <p class="field-hint">调一调下面几个滑块，可以控制话多话少、敢不敢跑题、回得长不长。</p>
+      </div>
+
+      <div class="field slider-field">
+        <div class="slider-label-row">
+          <span>温度（temperature）</span>
+          <span class="slider-value" id="temperatureValue">0.7</span>
+          <button type="button" class="icon-button tiny" data-help="temperature">？</button>
+        </div>
+        <input id="temperatureSlider" type="range" min="0" max="1.5" step="0.05">
+      </div>
+
+      <div class="field slider-field">
+        <div class="slider-label-row">
+          <span>最大回复长度（max_tokens）</span>
+          <span class="slider-value" id="maxTokensValue">4096</span>
+          <button type="button" class="icon-button tiny" data-help="max_tokens">？</button>
+        </div>
+        <input id="maxTokensSlider" type="range" min="256" max="8192" step="256">
+      </div>
+
+      <div class="field slider-field">
+        <div class="slider-label-row">
+          <span>重复惩罚（frequency_penalty）</span>
+          <span class="slider-value" id="frequencyPenaltyValue">0</span>
+          <button type="button" class="icon-button tiny" data-help="frequency_penalty">？</button>
+        </div>
+        <input id="frequencyPenaltySlider" type="range" min="0" max="2" step="0.1">
+      </div>
+
+      <div class="field slider-field">
+        <div class="slider-label-row">
+          <span>话题新鲜度（presence_penalty）</span>
+          <span class="slider-value" id="presencePenaltyValue">0</span>
+          <button type="button" class="icon-button tiny" data-help="presence_penalty">？</button>
+        </div>
+        <input id="presencePenaltySlider" type="range" min="0" max="2" step="0.1">
+      </div>
+
+      <hr class="settings-separator">
+
+      <div class="field">
+        <span>上下文限制（滑动窗口）</span>
+        <p class="field-hint">限制发送给模型的历史对话长度，省钱又避免超限。超出部分会自动从最早的对话开始丢弃。</p>
+      </div>
+
+      <div class="field">
+        <label class="field">
+          <span>限制模式</span>
+          <select id="contextLimitMode">
+            <option value="none">不限制（发送全部历史）</option>
+            <option value="rounds">按轮数限制</option>
+            <option value="tokens">按 Token 限制</option>
+          </select>
+        </label>
+      </div>
+
+      <div id="contextLimitRoundsField" class="field slider-field" style="display: none;">
+        <div class="slider-label-row">
+          <span>保留最近对话轮数</span>
+          <span class="slider-value" id="maxRoundsValue">50</span>
+        </div>
+        <input id="maxRoundsSlider" type="range" min="5" max="200" step="5">
+        <small class="field-hint">一轮 = 你发一条 + AI回一条</small>
+      </div>
+
+      <div id="contextLimitTokensField" class="field slider-field" style="display: none;">
+        <div class="slider-label-row">
+          <span>最大上下文 Token 数</span>
+          <span class="slider-value" id="maxContextTokensValue">30000</span>
+        </div>
+        <input id="maxContextTokensSlider" type="range" min="5000" max="200000" step="5000">
+        <small class="field-hint">粗略估算：1000 tokens ≈ 500-600 中文字</small>
+      </div>
+
+    </section>
+  </div>
+
+  <!-- 编辑记忆条目弹窗 -->
+  <div id="memoryItemModal" class="modal-overlay hidden">
+    <div class="modal-panel" style="max-width: 500px;">
+      <div class="modal-header">
+        <span class="modal-title" id="memoryItemModalTitle">添加记忆</span>
+        <button type="button" id="closeMemoryItemModal" class="icon-button close-button">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="field">
+          <span>记忆内容</span>
+          <textarea id="memoryItemContent" rows="4" placeholder="例如：我喜欢黑金配色、不要用敬语和我说话..."></textarea>
+        </label>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="memoryItemCancelButton" class="ghost-button">取消</button>
+        <button type="button" id="memoryItemSaveButton" class="primary-button">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 编辑服务器记忆弹窗 -->
+  <div id="serverMemoryEditModal" class="modal-overlay hidden">
+    <div class="modal-panel" style="max-width: 550px;">
+      <div class="modal-header">
+        <span class="modal-title">编辑服务器记忆</span>
+        <button type="button" id="closeServerMemoryEditModal" class="icon-button close-button">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="field">
+          <span>记忆内容</span>
+          <textarea id="serverMemoryEditContent" rows="5" placeholder="修改记忆内容..."></textarea>
+        </label>
+        <label class="field">
+          <span>类型</span>
+          <select id="serverMemoryEditType">
+            <option value="general">通用</option>
+            <option value="fact">事实</option>
+            <option value="preference">偏好</option>
+            <option value="habit">习惯</option>
+            <option value="experience">经历</option>
+            <option value="relationship">关系</option>
+            <option value="self">自我认知</option>
+            <option value="understanding">理解</option>
+            <option value="feel">感受</option>
+          </select>
+        </label>
+        <div class="field slider-field">
+          <div class="slider-label-row">
+            <span>重要性</span>
+            <span class="slider-value" id="serverMemoryEditImportanceValue">0.5</span>
+          </div>
+          <input id="serverMemoryEditImportanceSlider" type="range" min="0" max="1" step="0.1">
+        </div>
+        <div class="field">
+          <label class="toggle-row">
+            <input type="checkbox" id="serverMemoryEditPinned">
+            <span>📌 钉选（永不衰减、不会被覆盖）</span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="serverMemoryEditCancelBtn" class="ghost-button">取消</button>
+        <button type="button" id="serverMemoryEditSaveBtn" class="primary-button">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="state.js"></script>
+  <script src="memory.js"></script>
+  <script src="version.js"></script>
+  <script src="sw-register.js"></script>
+
+</body>
+</html>

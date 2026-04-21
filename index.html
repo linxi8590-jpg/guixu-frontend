@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>归墟</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600&family=Noto+Serif+SC:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <meta name="theme-color" content="#09090b">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <!-- Markdown 渲染 + 代码高亮 -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/core.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/javascript.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/python.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/css.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/sql.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/bash.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/json.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/xml.min.js"></script>
+</head>
+<body class="app-layout">
+  
+  <!-- 侧边栏 -->
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar-header">
+      <span class="app-logo">归墟</span>
+      <button id="closeSidebarBtn" class="icon-btn" title="收起侧边栏">✕</button>
+    </div>
+    
+    <button id="newChatButton" class="new-chat-btn">+ 新对话</button>
+    
+    <div class="sidebar-search">
+      <input id="chatSearchInput" type="text" placeholder="搜索对话...">
+    </div>
+    
+    <div id="chatList" class="chat-list">
+      <!-- 聊天列表动态渲染 -->
+    </div>
+    
+    <div class="sidebar-footer">
+      <a href="connections.html" class="sidebar-nav-item">
+        <span class="nav-icon">⚡</span>
+        <span>连接</span>
+      </a>
+      <a href="memory.html" class="sidebar-nav-item">
+        <span class="nav-icon">✦</span>
+        <span>记忆</span>
+      </a>
+      <a href="data.html" class="sidebar-nav-item">
+        <span class="nav-icon">◈</span>
+        <span>数据</span>
+      </a>
+    </div>
+  </aside>
+  
+  <!-- 主区域 -->
+  <main class="main-area">
+    <!-- 顶部栏 -->
+    <header class="chat-header">
+      <button id="openSidebarBtn" class="icon-btn hamburger" title="展开侧边栏">☰</button>
+      <div class="chat-header-info">
+        <span id="currentChatTitle" class="chat-title">新对话</span>
+        <span id="currentConnectionName" class="connection-badge"></span>
+      </div>
+      <div class="chat-header-actions">
+        <button id="switchModelBtn" class="icon-btn" title="切换模型">⚙</button>
+      </div>
+    </header>
+    
+    <!-- 模型切换面板 -->
+    <div id="modelSwitchPanel" class="model-switch-panel hidden">
+      <div class="model-switch-content">
+        <div class="model-switch-header">
+          <span>切换模型</span>
+          <button id="closeModelPanel" class="icon-btn">✕</button>
+        </div>
+        
+        <div class="model-switch-section">
+          <label>选择连接</label>
+          <select id="connectionSelect"></select>
+        </div>
+        
+        <div class="model-switch-section">
+          <label>选择模型</label>
+          <div id="modelList" class="model-list">
+            <!-- 模型列表动态渲染 -->
+          </div>
+        </div>
+        
+        <div class="model-switch-section">
+          <label>自定义模型</label>
+          <div class="custom-model-row">
+            <input id="activeModelInput" type="text" placeholder="输入模型名称...">
+            <button id="applyCustomModel" class="secondary-button">应用</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- 消息区域 -->
+    <div id="messagesContainer" class="messages-container">
+      <div id="emptyState" class="empty-state">
+        <div class="empty-icon">💬</div>
+        <h2>开始新对话</h2>
+        <p>在下方输入消息，开始与 AI 聊天</p>
+      </div>
+    </div>
+    
+    <!-- 输入区域 -->
+    <div class="input-area">
+      <!-- 图片预览 -->
+      <div id="imagePreviewArea" class="image-preview-area" style="display: none;">
+        <div id="imagePreviewList" class="image-preview-list"></div>
+      </div>
+      <!-- 搜索结果预览 -->
+      <div id="searchPreviewArea" class="search-preview-area" style="display: none;">
+        <div class="search-preview-header">
+          <span>🔍 搜索结果</span>
+          <button id="clearSearchBtn" class="icon-btn-small">✕</button>
+        </div>
+        <div id="searchPreviewContent" class="search-preview-content"></div>
+      </div>
+      <div class="input-wrapper">
+        <!-- 更多选项按钮 -->
+        <div class="input-more-container">
+          <button id="moreOptionsBtn" class="input-action-btn" title="更多选项">+</button>
+          <div id="moreOptionsMenu" class="more-options-menu hidden">
+            <button id="menuImageBtn" class="menu-option-item">
+              <span class="menu-icon">🖼️</span>
+              <span>图片</span>
+            </button>
+            <button id="menuLocationBtn" class="menu-option-item">
+              <span class="menu-icon">📍</span>
+              <span>位置</span>
+            </button>
+            <button id="menuSearchBtn" class="menu-option-item">
+              <span class="menu-icon">🔍</span>
+              <span>搜索</span>
+              <span id="searchStatusDot" class="status-dot"></span>
+            </button>
+            <div class="menu-divider"></div>
+            <div id="menuThinkingItem" class="menu-option-item menu-option-expandable">
+              <span class="menu-icon">💭</span>
+              <span>思考</span>
+              <span id="thinkingStatusText" class="menu-status-text">关闭</span>
+            </div>
+            <div id="thinkingPanel" class="thinking-panel hidden">
+              <div class="thinking-toggle-row">
+                <span>启用深度思考</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="thinkingToggle">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div id="thinkingSliderRow" class="thinking-slider-row hidden">
+                <span>思考强度</span>
+                <input type="range" id="thinkingBudget" min="1" max="50" value="10">
+                <span id="thinkingBudgetValue">10k</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <input type="file" id="imageInput" accept="image/*" multiple style="display: none;">
+        <textarea id="userInput" placeholder="输入消息..." rows="1"></textarea>
+        <button id="sendButton" class="send-btn" title="发送">➤</button>
+      </div>
+      <div id="statusBar" class="status-bar"></div>
+    </div>
+  </main>
+
+  <!-- 重命名对话弹窗 -->
+  <div id="renameChatModal" class="modal-overlay hidden">
+    <div class="modal-panel small">
+      <div class="modal-header">
+        <span>重命名对话</span>
+        <button id="closeRenameChatModal" class="icon-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <input id="renameChatInput" type="text" placeholder="对话名称">
+      </div>
+      <div class="modal-footer">
+        <button id="renameChatCancel" class="ghost-button">取消</button>
+        <button id="renameChatConfirm" class="primary-button">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="state.js"></script>
+  <script src="api.js"></script>
+  <script src="data.js"></script>
+  <script src="imagegen.js"></script>
+  <script src="chat.js"></script>
+  <script src="version.js"></script>
+  <script src="sw-register.js"></script>
+</body>
+</html>

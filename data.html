@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>归墟 · 数据</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600&family=Noto+Serif+SC:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <meta name="theme-color" content="#09090b">
+</head>
+<body>
+  <header class="top-nav">
+    <div class="top-nav-left">
+      <span class="app-logo">归墟</span>
+      <span class="top-nav-page">数据</span>
+    </div>
+    <nav class="top-nav-links">
+      <a href="index.html">聊天</a>
+      <a href="connections.html">连接</a>
+      <a href="memory.html">记忆</a>
+      <a href="data.html" class="active">数据</a>
+    </nav>
+  </header>
+
+  <div class="settings-page">
+    <header class="settings-header">
+      <h1>数据管理 & 云同步</h1>
+      <p>使用服务器记忆配置进行云同步，换设备、清缓存都不怕丢。</p>
+    </header>
+
+    <section class="settings-body narrow">
+      <!-- 云同步状态区 -->
+      <div class="field">
+        <span>☁️ 云同步</span>
+        <div id="syncStatusArea">
+          <!-- 未配置状态 -->
+          <div id="notConfiguredArea">
+            <p class="field-hint">请先在「记忆」页面配置服务器记忆，即可使用云同步功能。</p>
+            <a href="memory.html" class="primary-button" style="display: inline-block; text-decoration: none;">前往配置</a>
+          </div>
+
+          <!-- 已配置状态 -->
+          <div id="configuredArea" style="display: none;">
+            <div class="sync-status-row">
+              <span class="sync-user">🖥️ <span id="serverUrl"></span></span>
+              <span id="syncIndicator" class="sync-indicator">○</span>
+            </div>
+            <p class="field-hint" id="lastSyncTime">上次同步：从未</p>
+            <div class="editor-buttons" style="justify-content: flex-start; gap: 8px; flex-wrap: wrap;">
+              <button id="migrateDataButton" class="secondary-button">🚀 迁移旧数据</button>
+              <button id="syncNowButton" class="secondary-button">⬆️ 推送配置</button>
+              <button id="pullFromCloudButton" class="secondary-button">⬇️ 从云端拉取</button>
+            </div>
+            <p class="field-hint" style="margin-top: 8px;">
+              <b>迁移旧数据</b>：将localStorage中的聊天记录迁移到服务器（只需一次）<br>
+              <b>推送/拉取</b>：同步配置数据
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <hr class="settings-separator">
+
+      <div class="field">
+        <span>📁 本地导出</span>
+        <button id="exportDataButton" class="secondary-button">导出为 JSON 文件</button>
+        <p class="field-hint">包含连接配置、会话记录、摘要等内容，方便你自己备份或迁移。</p>
+      </div>
+
+      <div class="field">
+        <span>📂 本地导入</span>
+        <input id="importFileInput" type="file" accept="application/json">
+        <p class="field-hint">导入时可选择「合并」或「覆盖」。合并会保留本地数据，只添加新的内容。</p>
+      </div>
+    </section>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="state.js"></script>
+  <script src="data.js"></script>
+  <script src="version.js"></script>
+  <script src="sw-register.js"></script>
+
+</body>
+</html>
