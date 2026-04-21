@@ -702,9 +702,16 @@
     
     const chat = getActiveChat(state);
     const messages = chat ? getMessages(state, chat.id) : [];
+    const currentChatId = els.messagesContainer.dataset.chatId || "";
+    const newChatId = chat?.id || "";
+    const isChatSwitch = currentChatId !== newChatId;
     
-    // 清空容器
-    els.messagesContainer.innerHTML = "";
+    // 切换对话时才清空重建
+    if (isChatSwitch) {
+      els.messagesContainer.innerHTML = "";
+      els.messagesContainer.dataset.chatId = newChatId;
+      els.messagesContainer.dataset.renderOffset = "0";
+    }
     
     if (messages.length === 0) {
       els.messagesContainer.innerHTML = `
@@ -714,98 +721,203 @@
           <p>在下方输入消息，开始与 AI 聊天</p>
         </div>
       `;
+      els.messagesContainer.dataset.chatId = newChatId;
       return;
     }
     
-    messages.forEach((msg, idx) => {
-      const div = document.createElement("div");
-      div.className = "message " + msg.role;
-      div.dataset.msgId = msg.id;
-      
-      const formatted = formatMessageContent(msg.content);
-      const time = msg.createdAt ? new Date(msg.createdAt).toLocaleTimeString() : "";
-      const tokens = msg.tokenUsage ? `📊 ${msg.tokenUsage.totalTokens || 0} tokens` : "";
-      
-      // 图片显示
-      let imagesHtml = "";
-      if (msg.images && msg.images.length > 0) {
-        imagesHtml = '<div class="message-images">';
-        msg.images.forEach(img => {
-          imagesHtml += `<img src="${img}" class="message-image" onclick="window.open('${img}', '_blank')">`;
-        });
-        imagesHtml += '</div>';
+    // 虚拟滚动: 只渲染最近 VISIBLE_LIMIT 条消息
+    const VISIBLE_LIMIT = 50;
+    const renderOffset = parseInt(els.messagesContainer.dataset.renderOffset || "0");
+    const startIdx = Math.max(0, messages.length - VISIBLE_LIMIT - renderOffset);
+    const visibleMessages = messages.slice(startIdx);
+    
+    // 已渲染的消息 ID 集合
+    const renderedIds = new Set();
+    els.messagesContainer.querySelectorAll("[data-msg-id]").forEach(el => {
+      renderedIds.add(el.dataset.msgId);
+    });
+    
+    // 清理已删除的消息
+    const validIds = new Set(visibleMessages.map(m => m.id));
+    els.messagesContainer.querySelectorAll("[data-msg-id]").forEach(el => {
+      if (!validIds.has(el.dataset.msgId)) {
+        el.remove();
       }
+    });
+    
+    // 更新或添加 "加载更多" 按钮
+    let loadMoreEl = els.messagesContainer.querySelector(".load-more-bar");
+    if (startIdx > 0) {
+      if (!loadMoreEl) {
+        loadMoreEl = document.createElement("div");
+        loadMoreEl.className = "load-more-bar";
+        loadMoreEl.style.cssText = "text-align:center;padding:12px;";
+        els.messagesContainer.prepend(loadMoreEl);
+      }
+      loadMoreEl.innerHTML = `<button class="msg-action-btn" style="padding:6px 16px;font-size:13px;">⬆ 加载更早的消息 (还有 ${startIdx} 条)</button>`;
+      loadMoreEl.onclick = () => {
+        const prevHeight = els.messagesContainer.scrollHeight;
+        els.messagesContainer.dataset.renderOffset = String(renderOffset + 30);
+        renderMessages();
+        // 保持滚动位置
+        requestAnimationFrame(() => {
+          const newHeight = els.messagesContainer.scrollHeight;
+          els.messagesContainer.scrollTop += (newHeight - prevHeight);
+        });
+      };
+    } else if (loadMoreEl) {
+      loadMoreEl.remove();
+    }
+    
+    // 增量添加新消息
+    visibleMessages.forEach((msg, relIdx) => {
+      const globalIdx = startIdx + relIdx;
       
-      // 思考过程显示（折叠）
-      let thinkingHtml = "";
-      if (msg._thinking && msg.role === "assistant") {
-        const thinkingFormatted = formatMessageContent(msg._thinking);
-        thinkingHtml = `
-          <div class="thinking-block collapsed">
+      if (renderedIds.has(msg.id)) {
+        // 已存在的消息: 增量更新内容/思考/token
+        const existing = els.messagesContainer.querySelector(`[data-msg-id="${msg.id}"]`);
+        if (!existing) return;
+        
+        // 更新 token 信息
+        if (msg.tokenUsage) {
+          const metaSpans = existing.querySelectorAll(".message-meta span");
+          const tokenText = `📊 ${msg.tokenUsage.totalTokens || 0} tokens`;
+          if (metaSpans.length >= 2) {
+            metaSpans[1].textContent = tokenText;
+          } else if (metaSpans.length === 1) {
+            const span = document.createElement("span");
+            span.textContent = tokenText;
+            existing.querySelector(".message-meta")?.insertBefore(span, existing.querySelector(".message-actions"));
+          }
+        }
+        
+        // 添加思考过程（流式结束后才有）
+        if (msg._thinking && msg.role === "assistant" && !existing.querySelector(".thinking-block")) {
+          const thinkingFormatted = formatMessageContent(msg._thinking);
+          const thinkingDiv = document.createElement("div");
+          thinkingDiv.className = "thinking-block collapsed";
+          thinkingDiv.innerHTML = `
             <div class="thinking-header">
               <span class="thinking-icon">💭</span>
               <span class="thinking-title">思考过程</span>
               <span class="thinking-toggle">▶</span>
             </div>
             <div class="thinking-content">${thinkingFormatted}</div>
-          </div>
-        `;
+          `;
+          thinkingDiv.querySelector(".thinking-header").addEventListener("click", () => {
+            thinkingDiv.classList.toggle("collapsed");
+            const toggle = thinkingDiv.querySelector(".thinking-toggle");
+            toggle.textContent = thinkingDiv.classList.contains("collapsed") ? "▶" : "▼";
+          });
+          const bubble = existing.querySelector(".message-bubble");
+          if (bubble) bubble.prepend(thinkingDiv);
+        }
+        
+        // 更新最终内容（流式可能留下工具调用提示文字，需要刷新为最终内容）
+        const contentEl = existing.querySelector(".message-content");
+        if (contentEl && msg.content) {
+          const newHtml = formatMessageContent(msg.content);
+          if (contentEl.innerHTML !== newHtml) {
+            contentEl.innerHTML = newHtml;
+          }
+        }
+        return;
       }
       
-      div.innerHTML = `
-        <div class="message-bubble">
-          ${thinkingHtml}
-          ${imagesHtml}
-          <div class="message-content">${formatted}</div>
-        </div>
-        <div class="message-meta">
-          <span>${time}</span>
-          ${tokens ? `<span>${tokens}</span>` : ""}
-          <div class="message-actions">
-            <button class="msg-action-btn copy-btn">复制</button>
-            ${msg.role === "user" ? `<button class="msg-action-btn edit-btn">编辑</button>` : ""}
-            ${msg.role === "assistant" ? `<button class="msg-action-btn regen-btn">重新生成</button>` : ""}
-            ${msg.role === "assistant" && state.ttsConfig && state.ttsConfig.enabled && state.ttsConfig.type ? `<button class="msg-action-btn tts-btn" title="播放语音">🔊</button>` : ""}
-          </div>
-        </div>
-      `;
-      
-      // 思考过程折叠展开
-      const thinkingBlock = div.querySelector(".thinking-block");
-      if (thinkingBlock) {
-        thinkingBlock.querySelector(".thinking-header").addEventListener("click", () => {
-          thinkingBlock.classList.toggle("collapsed");
-          const toggle = thinkingBlock.querySelector(".thinking-toggle");
-          toggle.textContent = thinkingBlock.classList.contains("collapsed") ? "▶" : "▼";
-        });
-      }
-      
-      div.querySelector(".copy-btn").addEventListener("click", () => {
-        navigator.clipboard.writeText(msg.content);
-        const btn = div.querySelector(".copy-btn");
-        btn.textContent = "已复制";
-        setTimeout(() => btn.textContent = "复制", 1500);
-      });
-      
-      const editBtn = div.querySelector(".edit-btn");
-      if (editBtn) {
-        editBtn.addEventListener("click", () => startEditMessage(chat.id, msg.id, idx));
-      }
-      
-      const regenBtn = div.querySelector(".regen-btn");
-      if (regenBtn) {
-        regenBtn.addEventListener("click", () => regenerateMessage(chat.id, idx));
-      }
-      
-      const ttsBtn = div.querySelector(".tts-btn");
-      if (ttsBtn) {
-        ttsBtn.addEventListener("click", () => playTts(msg.content, ttsBtn));
-      }
-      
+      const div = createMessageElement(msg, globalIdx, chat);
       els.messagesContainer.appendChild(div);
     });
     
     els.messagesContainer.scrollTop = els.messagesContainer.scrollHeight;
+  }
+  
+  // 创建单个消息 DOM 元素
+  function createMessageElement(msg, idx, chat) {
+    const div = document.createElement("div");
+    div.className = "message " + msg.role;
+    div.dataset.msgId = msg.id;
+    
+    const formatted = formatMessageContent(msg.content);
+    const time = msg.createdAt ? new Date(msg.createdAt).toLocaleTimeString() : "";
+    const tokens = msg.tokenUsage ? `📊 ${msg.tokenUsage.totalTokens || 0} tokens` : "";
+    
+    // 图片显示
+    let imagesHtml = "";
+    if (msg.images && msg.images.length > 0) {
+      imagesHtml = '<div class="message-images">';
+      msg.images.forEach(img => {
+        imagesHtml += `<img src="${img}" class="message-image" onclick="window.open('${img}', '_blank')">`;
+      });
+      imagesHtml += '</div>';
+    }
+    
+    // 思考过程显示（折叠）
+    let thinkingHtml = "";
+    if (msg._thinking && msg.role === "assistant") {
+      const thinkingFormatted = formatMessageContent(msg._thinking);
+      thinkingHtml = `
+        <div class="thinking-block collapsed">
+          <div class="thinking-header">
+            <span class="thinking-icon">💭</span>
+            <span class="thinking-title">思考过程</span>
+            <span class="thinking-toggle">▶</span>
+          </div>
+          <div class="thinking-content">${thinkingFormatted}</div>
+        </div>
+      `;
+    }
+    
+    div.innerHTML = `
+      <div class="message-bubble">
+        ${thinkingHtml}
+        ${imagesHtml}
+        <div class="message-content">${formatted}</div>
+      </div>
+      <div class="message-meta">
+        <span>${time}</span>
+        ${tokens ? `<span>${tokens}</span>` : ""}
+        <div class="message-actions">
+          <button class="msg-action-btn copy-btn">复制</button>
+          ${msg.role === "user" ? `<button class="msg-action-btn edit-btn">编辑</button>` : ""}
+          ${msg.role === "assistant" ? `<button class="msg-action-btn regen-btn">重新生成</button>` : ""}
+          ${msg.role === "assistant" && state.ttsConfig && state.ttsConfig.enabled && state.ttsConfig.type ? `<button class="msg-action-btn tts-btn" title="播放语音">🔊</button>` : ""}
+        </div>
+      </div>
+    `;
+    
+    // 思考过程折叠展开
+    const thinkingBlock = div.querySelector(".thinking-block");
+    if (thinkingBlock) {
+      thinkingBlock.querySelector(".thinking-header").addEventListener("click", () => {
+        thinkingBlock.classList.toggle("collapsed");
+        const toggle = thinkingBlock.querySelector(".thinking-toggle");
+        toggle.textContent = thinkingBlock.classList.contains("collapsed") ? "▶" : "▼";
+      });
+    }
+    
+    div.querySelector(".copy-btn").addEventListener("click", () => {
+      navigator.clipboard.writeText(msg.content);
+      const btn = div.querySelector(".copy-btn");
+      btn.textContent = "已复制";
+      setTimeout(() => btn.textContent = "复制", 1500);
+    });
+    
+    const editBtn = div.querySelector(".edit-btn");
+    if (editBtn) {
+      editBtn.addEventListener("click", () => startEditMessage(chat.id, msg.id, idx));
+    }
+    
+    const regenBtn = div.querySelector(".regen-btn");
+    if (regenBtn) {
+      regenBtn.addEventListener("click", () => regenerateMessage(chat.id, idx));
+    }
+    
+    const ttsBtn = div.querySelector(".tts-btn");
+    if (ttsBtn) {
+      ttsBtn.addEventListener("click", () => playTts(msg.content, ttsBtn));
+    }
+    
+    return div;
   }
 
   // ========== TTS 播放功能 ==========
@@ -2997,6 +3109,9 @@ ${modelDescriptions}
           body.tool_choice = "auto";
         }
         
+        // 流式请求（解决超时问题）
+        body.stream = true;
+        
         const resp = await fetchWithTimeout(url, {
           method: "POST",
           headers: {
@@ -3004,76 +3119,80 @@ ${modelDescriptions}
             "Authorization": "Bearer " + apiKey
           },
           body: JSON.stringify(body)
-        }, 60000);
+        }, 30000);
         
         if (!resp.ok) {
           const errText = await resp.text();
           console.error("OpenAI API 错误:", resp.status, errText);
           throw new Error("API 错误: " + resp.status + " - " + errText.slice(0, 200));
         }
-        response = await resp.json();
         
-        const choice = response.choices[0];
-        const message = choice.message;
+        let partialTextOai = finalText;
+        const streamResultOai = await parseOpenAIStreamWithTools(resp, (chunk) => {
+          partialTextOai += chunk;
+          updateStreamingMessage(assistantMsgId, partialTextOai);
+        });
         
         // 累计 token
-        if (response.usage) {
-          totalUsage.promptTokens += response.usage.prompt_tokens || 0;
-          totalUsage.completionTokens += response.usage.completion_tokens || 0;
-          totalUsage.totalTokens += response.usage.total_tokens || 0;
+        if (streamResultOai.usage) {
+          totalUsage.promptTokens += streamResultOai.usage.promptTokens || 0;
+          totalUsage.completionTokens += streamResultOai.usage.completionTokens || 0;
+          totalUsage.totalTokens += streamResultOai.usage.totalTokens || 0;
+        }
+        
+        // 提取思考内容（GPT-5 reasoning_content）
+        if (streamResultOai.thinking) {
+          finalThinking += streamResultOai.thinking;
+          console.log(`[OpenAI Thinking] 流式提取思考内容，长度: ${streamResultOai.thinking.length}`);
         }
         
         // 检查是否有工具调用
-        if (message.tool_calls && message.tool_calls.length > 0) {
-          // 显示正在调用工具
-          const toolNames = message.tool_calls.map(tc => tc.function.name).join(", ");
-          updateStreamingMessage(assistantMsgId, `🔧 正在调用: ${toolNames}...`);
+        if (streamResultOai.toolCalls.length > 0) {
+          const toolNames = streamResultOai.toolCalls.map(tc => tc.name).join(", ");
+          setStatus(`🔧 调用: ${toolNames}`);
+          updateStreamingMessage(assistantMsgId, partialTextOai + (partialTextOai ? "\n\n" : "") + `🔧 正在调用: ${toolNames}...`);
           
-          // 添加助手消息（包含工具调用）
+          // 构建 OpenAI 格式的工具调用消息
+          const assistantToolCalls = streamResultOai.toolCalls.map((tc, i) => ({
+            id: tc.id || `call_${Date.now()}_${i}`,
+            type: "function",
+            function: { name: tc.name, arguments: tc.arguments }
+          }));
+          
           conversationMessages.push({
             role: "assistant",
-            content: message.content || "",
-            tool_calls: message.tool_calls
+            content: streamResultOai.text || null,
+            tool_calls: assistantToolCalls
           });
           
-          // 执行每个工具调用
-          for (const toolCall of message.tool_calls) {
-            const toolName = toolCall.function.name;
-            const toolArgs = JSON.parse(toolCall.function.arguments || "{}");
+          for (const tc of assistantToolCalls) {
+            const toolName = tc.function.name;
+            let toolArgs = {};
+            try { toolArgs = JSON.parse(tc.function.arguments || "{}"); } catch(e) {}
             const toolResult = await executeTool(toolName, toolArgs);
-            console.log(`[OpenAI调试] 工具 ${toolName} 执行完成，结果长度: ${toolResult?.length || 0}`);
+            console.log(`[OpenAI流式] 工具 ${toolName} 执行完成`);
             
-            // 保存工具结果，以便在空响应时使用
             lastToolResult = toolResult;
             lastToolName = toolName;
             
             conversationMessages.push({
               role: "tool",
-              tool_call_id: toolCall.id,
+              tool_call_id: tc.id,
               content: toolResult
             });
           }
           
-          // 继续循环，让模型处理工具结果
+          // 保留已输出的文本
+          finalText = partialTextOai;
           continue;
         }
         
         // 没有工具调用，返回最终文本
-        finalText = message.content || "";
+        finalText = partialTextOai;
         
-        // 提取 OpenAI 思考内容（GPT-5 系列 reasoning_content）
-        if (message.reasoning_content) {
-          finalThinking = message.reasoning_content;
-          console.log(`[OpenAI Thinking] 提取到思考内容，长度: ${finalThinking.length}`);
-        }
-        
-        // 如果文本为空但之前有工具调用，直接用工具结果兜底
-        // （不再追加 user 消息重试，会导致连续两条 user 而 API 400）
         if (!finalText && lastToolResult) {
-          console.log(`[OpenAI调试] 模型返回空文本，使用工具结果作为回复`);
-          if (lastToolName && lastToolName.includes('save_memory')) {
-            finalText = lastToolResult;
-          } else if (lastToolName && lastToolName.includes('search_memory')) {
+          console.log(`[OpenAI流式] 模型返回空文本，使用工具结果作为回复`);
+          if (lastToolName?.includes('save_memory') || lastToolName?.includes('search_memory')) {
             finalText = lastToolResult;
           } else {
             finalText = `✓ ${lastToolResult}`;
@@ -3337,68 +3456,91 @@ ${modelDescriptions}
           console.log(`[Claude Thinking] 已启用，预算: ${body.thinking.budget_tokens} tokens`);
         }
         
+        // 流式请求（解决超时 + 实时显示）
+        body.stream = true;
+        
         const resp = await fetchWithTimeout(url, {
           method: "POST",
           headers,
           body: JSON.stringify(body)
-        }, 120000);  // thinking 模式可能需要更长时间
+        }, 30000);
         
         if (!resp.ok) {
           const errText = await resp.text().catch(() => '');
           throw new Error("Anthropic API 错误: " + resp.status + " " + errText.slice(0, 200));
         }
-        response = await resp.json();
+        
+        let partialTextAnth = finalText;
+        const streamResultAnth = await parseAnthropicStreamWithTools(resp, (chunk) => {
+          partialTextAnth += chunk;
+          updateStreamingMessage(assistantMsgId, partialTextAnth);
+        });
         
         // 累计 token
-        if (response.usage) {
-          totalUsage.promptTokens += response.usage.input_tokens || 0;
-          totalUsage.completionTokens += response.usage.output_tokens || 0;
-          totalUsage.totalTokens += (response.usage.input_tokens || 0) + (response.usage.output_tokens || 0);
+        if (streamResultAnth.usage) {
+          totalUsage.promptTokens += streamResultAnth.usage.promptTokens || 0;
+          totalUsage.completionTokens += streamResultAnth.usage.completionTokens || 0;
+          totalUsage.totalTokens += streamResultAnth.usage.totalTokens || 0;
+        }
+        
+        // 提取 thinking 内容
+        if (streamResultAnth.thinking) {
+          finalThinking += streamResultAnth.thinking;
+          console.log(`[Claude Thinking] 流式提取思考内容，长度: ${streamResultAnth.thinking.length}`);
         }
         
         // 检查是否有工具调用
-        const toolUseBlock = response.content?.find(b => b.type === "tool_use");
-        if (toolUseBlock) {
-          updateStreamingMessage(assistantMsgId, `🔧 正在调用: ${toolUseBlock.name}...`);
+        if (streamResultAnth.toolUseBlocks.length > 0) {
+          const toolNames = streamResultAnth.toolUseBlocks.map(b => b.name).join(", ");
+          setStatus(`🔧 调用: ${toolNames}`);
+          updateStreamingMessage(assistantMsgId, partialTextAnth + (partialTextAnth ? "\n\n" : "") + `🔧 正在调用: ${toolNames}...`);
           
-          // 添加助手消息
+          // 重建 Anthropic 格式的 content 数组
+          const assistantContent = [];
+          if (streamResultAnth.text) {
+            assistantContent.push({ type: "text", text: streamResultAnth.text });
+          }
+          for (const tb of streamResultAnth.toolUseBlocks) {
+            assistantContent.push({ type: "tool_use", id: tb.id, name: tb.name, input: tb.input });
+          }
+          
           conversationMessages.push({
             role: "assistant",
-            content: response.content
+            content: assistantContent
           });
           
-          const toolResult = await executeTool(toolUseBlock.name, toolUseBlock.input || {});
-          
-          // 保存工具结果，以便在空响应时使用
-          lastToolResult = toolResult;
-          lastToolName = toolUseBlock.name;
+          // 执行所有工具调用并收集结果
+          const toolResults = [];
+          for (const tb of streamResultAnth.toolUseBlocks) {
+            const toolResult = await executeTool(tb.name, tb.input || {});
+            console.log(`[Anthropic流式] 工具 ${tb.name} 执行完成`);
+            
+            lastToolResult = toolResult;
+            lastToolName = tb.name;
+            
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: tb.id,
+              content: toolResult
+            });
+          }
           
           conversationMessages.push({
             role: "user",
-            tool_use_id: toolUseBlock.id,
-            content: toolResult
+            content: toolResults
           });
           
+          // 保留已输出的文本
+          finalText = partialTextAnth;
           continue;
         }
         
-        // 提取 thinking 内容（Claude Extended Thinking）
-        const thinkingBlocks = response.content?.filter(b => b.type === "thinking") || [];
-        if (thinkingBlocks.length > 0) {
-          finalThinking = thinkingBlocks.map(b => b.thinking).join("\n\n");
-          console.log(`[Claude Thinking] 提取到思考内容，长度: ${finalThinking.length}`);
-        }
+        // 没有工具调用，返回最终文本
+        finalText = partialTextAnth;
         
-        // 提取文本
-        finalText = response.content?.filter(b => b.type === "text").map(b => b.text).join("") || "";
-        
-        // 如果文本为空但之前有工具调用，直接用工具结果兜底
-        // （不再追加 user 消息重试，会导致连续两条 user 而 Anthropic 400）
         if (!finalText && lastToolResult) {
-          console.log(`[Anthropic调试] 模型返回空文本，使用工具结果作为回复`);
-          if (lastToolName && lastToolName.includes('save_memory')) {
-            finalText = lastToolResult;
-          } else if (lastToolName && lastToolName.includes('search_memory')) {
+          console.log(`[Anthropic流式] 模型返回空文本，使用工具结果作为回复`);
+          if (lastToolName?.includes('save_memory') || lastToolName?.includes('search_memory')) {
             finalText = lastToolResult;
           } else {
             finalText = `✓ ${lastToolResult}`;
@@ -3863,6 +4005,176 @@ ${modelDescriptions}
     }
 
     throw new Error("不支持的 provider: " + provider);
+  }
+
+
+  // ========== 流式工具调用解析器 ==========
+  
+  // OpenAI 流式解析（支持工具调用）
+  async function parseOpenAIStreamWithTools(resp, onTextChunk) {
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let fullText = "";
+    let usage = null;
+    let thinking = "";
+    
+    // 工具调用累加器
+    const toolCallsMap = {}; // index -> {id, name, arguments}
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const data = line.slice(6);
+        if (data === "[DONE]") continue;
+        
+        try {
+          const json = JSON.parse(data);
+          const delta = json.choices?.[0]?.delta;
+          
+          // 文本内容
+          if (delta?.content) {
+            fullText += delta.content;
+            onTextChunk(delta.content);
+          }
+          
+          // Reasoning content (GPT-5)
+          if (delta?.reasoning_content) {
+            thinking += delta.reasoning_content;
+          }
+          
+          // 工具调用增量
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index;
+              if (!toolCallsMap[idx]) {
+                toolCallsMap[idx] = { id: "", name: "", arguments: "" };
+              }
+              if (tc.id) toolCallsMap[idx].id = tc.id;
+              if (tc.function?.name) toolCallsMap[idx].name += tc.function.name;
+              if (tc.function?.arguments) toolCallsMap[idx].arguments += tc.function.arguments;
+            }
+          }
+          
+          // Usage
+          if (json.usage) {
+            usage = {
+              promptTokens: json.usage.prompt_tokens || 0,
+              completionTokens: json.usage.completion_tokens || 0,
+              totalTokens: json.usage.total_tokens || 0,
+            };
+          }
+        } catch (e) {}
+      }
+    }
+    
+    // 转换工具调用
+    const toolCalls = Object.values(toolCallsMap).filter(tc => tc.name);
+    
+    return { text: fullText, toolCalls, usage, thinking };
+  }
+
+  // Anthropic 流式解析（支持工具调用 + thinking）
+  async function parseAnthropicStreamWithTools(resp, onTextChunk) {
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let fullText = "";
+    let usage = null;
+    let thinking = "";
+    let stopReason = "";
+    
+    // 工具调用累加器
+    const toolUseBlocks = [];
+    let currentBlockType = null;
+    let currentToolUse = null;
+    let currentToolJson = "";
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const data = line.slice(6);
+        
+        try {
+          const json = JSON.parse(data);
+          
+          if (json.type === "content_block_start") {
+            const block = json.content_block;
+            currentBlockType = block?.type;
+            if (block?.type === "tool_use") {
+              currentToolUse = { id: block.id, name: block.name, input: {} };
+              currentToolJson = "";
+            }
+          }
+          
+          if (json.type === "content_block_delta") {
+            const delta = json.delta;
+            if (delta?.type === "text_delta" && delta.text) {
+              fullText += delta.text;
+              onTextChunk(delta.text);
+            }
+            if (delta?.type === "thinking_delta" && delta.thinking) {
+              thinking += delta.thinking;
+            }
+            if (delta?.type === "input_json_delta" && delta.partial_json) {
+              currentToolJson += delta.partial_json;
+            }
+          }
+          
+          if (json.type === "content_block_stop") {
+            if (currentToolUse && currentToolJson) {
+              try {
+                currentToolUse.input = JSON.parse(currentToolJson);
+              } catch (e) {
+                currentToolUse.input = {};
+              }
+              toolUseBlocks.push(currentToolUse);
+              currentToolUse = null;
+              currentToolJson = "";
+            }
+            currentBlockType = null;
+          }
+          
+          if (json.type === "message_start" && json.message?.usage) {
+            usage = {
+              promptTokens: json.message.usage.input_tokens || 0,
+              completionTokens: 0,
+              totalTokens: json.message.usage.input_tokens || 0,
+            };
+          }
+          
+          if (json.type === "message_delta") {
+            if (json.usage) {
+              const prevInput = usage ? usage.promptTokens : 0;
+              usage = {
+                promptTokens: prevInput,
+                completionTokens: json.usage.output_tokens || 0,
+                totalTokens: prevInput + (json.usage.output_tokens || 0),
+              };
+            }
+            if (json.delta?.stop_reason) {
+              stopReason = json.delta.stop_reason;
+            }
+          }
+        } catch (e) {}
+      }
+    }
+    
+    return { text: fullText, toolUseBlocks, usage, thinking, stopReason };
   }
 
   // 处理 OpenAI 流式响应
