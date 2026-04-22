@@ -445,8 +445,13 @@
       return;
     }
     
-    // 钉选的排最前
-    filtered.sort((a, b) => (b.pinned || 0) - (a.pinned || 0));
+    // 排序：钉选最前，然后按综合热度（重要度+加成+访问次数）排
+    filtered.sort((a, b) => {
+      if ((b.pinned || 0) !== (a.pinned || 0)) return (b.pinned || 0) - (a.pinned || 0);
+      const scoreA = (a.importance || 0.5) + (a.dynamic_boost || 0) + Math.min(0.2, (a.access_count || 0) * 0.01);
+      const scoreB = (b.importance || 0.5) + (b.dynamic_boost || 0) + Math.min(0.2, (b.access_count || 0) * 0.01);
+      return scoreB - scoreA;
+    });
     
     filtered.forEach((mem) => {
       const div = document.createElement("div");
@@ -466,7 +471,21 @@
       const time = document.createElement("small");
       time.className = "memory-time";
       const date = new Date(mem.created_at);
-      time.textContent = date.toLocaleDateString("zh-CN");
+      const boost = mem.dynamic_boost || 0;
+      const baseImp = mem.importance || 0.5;
+      const effImp = Math.min(1.0, baseImp + boost);
+      const accessCount = mem.access_count || 0;
+      
+      // 构建时间行：日期 + 重要度 + 访问次数 + 热度加成
+      let timeText = date.toLocaleDateString("zh-CN");
+      timeText += `  ·  重要度 ${effImp.toFixed(2)}`;
+      if (boost >= 0.01) {
+        timeText += ` (🔥 +${boost.toFixed(2)})`;
+      }
+      if (accessCount >= 3) {
+        timeText += `  ·  访问 ${accessCount} 次`;
+      }
+      time.textContent = timeText;
       
       // 操作按钮
       const actions = document.createElement("div");
