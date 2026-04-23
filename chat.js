@@ -2399,7 +2399,7 @@ ${memoryTexts}
       
       tools.push({
         name: "save_memory",
-        description: "保存关于林曦的新记忆。仅当林曦提到【全新的】重要信息时使用，如新偏好、新习惯、新经历。注意：不要重复保存已经记住的信息，如果不确定是否已存，先用search_memory查一下。",
+        description: "保存关于林曦的新记忆。仅当林曦提到【全新的】重要信息时使用。注意：保存前先用search_memory查一下是否已有相似记忆，如果有，请用update_memory更新而不是重复保存。",
         parameters: {
           type: "object",
           properties: {
@@ -2408,6 +2408,21 @@ ${memoryTexts}
             importance: { type: "number", description: "重要性0-1，默认0.5" }
           },
           required: ["content"]
+        }
+      });
+      
+      tools.push({
+        name: "update_memory",
+        description: "更新已有的记忆。当需要补充新信息到已有记忆时使用，避免重复保存。先用search_memory找到记忆ID，再用此工具更新内容。",
+        parameters: {
+          type: "object",
+          properties: {
+            memory_id: { type: "number", description: "要更新的记忆ID（通过search_memory获取）" },
+            content: { type: "string", description: "更新后的完整内容" },
+            type: { type: "string", enum: ["fact", "preference", "habit", "experience", "relationship", "understanding", "self", "feel"], description: "记忆类型（可选）" },
+            importance: { type: "number", description: "重要性0-1（可选）" }
+          },
+          required: ["memory_id", "content"]
         }
       });
     }
@@ -2860,6 +2875,39 @@ ${modelDescriptions}
       } catch (e) {
         console.error("save_memory error:", e);
         return `保存记忆失败: ${e.message}`;
+      }
+    }
+    
+    // 更新记忆工具
+    if (toolName === "update_memory") {
+      setStatus("✏️ 更新记忆...");
+      const serverMemConfig = state.serverMemory || {};
+      if (!serverMemConfig.serverUrl) return "记忆服务未配置";
+      
+      try {
+        const baseUrl = serverMemConfig.serverUrl.replace(/\/$/, "");
+        const headers = { 'Content-Type': 'application/json' };
+        if (serverMemConfig.token) headers['x-memory-token'] = serverMemConfig.token;
+        
+        const resp = await fetch(baseUrl + "/memory/" + toolArgs.memory_id, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify({
+            content: toolArgs.content,
+            type: toolArgs.type || null,
+            importance: toolArgs.importance || null
+          })
+        });
+        
+        if (!resp.ok) {
+          const errText = await resp.text().catch(() => '未知错误');
+          return `更新记忆失败 (${resp.status}): ${errText.slice(0, 100)}`;
+        }
+        
+        return `已更新记忆 #${toolArgs.memory_id}: ${toolArgs.content.slice(0, 80)}`;
+      } catch (e) {
+        console.error("update_memory error:", e);
+        return `更新记忆失败: ${e.message}`;
       }
     }
     
