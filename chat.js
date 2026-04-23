@@ -1093,8 +1093,64 @@
     await sendMessage(chat, conn, null, []);
   }
 
+  // 从正文中提取 thinking 标签（兜底兼容中转站）
+  // 支持: <thinking>...</thinking>, <think>...</think>, [thinking]...[/thinking]
+  function extractInlineThinking(text) {
+    if (!text || typeof text !== "string") return { thinking: "", cleanText: text };
+    
+    const patterns = [
+      /<thinking>([\s\S]*?)<\/thinking>/gi,
+      /<think>([\s\S]*?)<\/think>/gi,
+      /\[thinking\]([\s\S]*?)\[\/thinking\]/gi,
+      /\[think\]([\s\S]*?)\[\/think\]/gi,
+    ];
+    
+    const thinkingParts = [];
+    let cleanText = text;
+    
+    for (const pat of patterns) {
+      let match;
+      const tempPat = new RegExp(pat.source, pat.flags);
+      while ((match = tempPat.exec(text)) !== null) {
+        const content = (match[1] || "").trim();
+        if (content) thinkingParts.push(content);
+      }
+      cleanText = cleanText.replace(pat, "");
+    }
+    
+    // 处理未闭合的开标签（中转站有时会截断）
+    // <thinking> 出现但没有闭合 -> 后面全部当 thinking 丢掉（避免显示半截）
+    const unclosed = cleanText.match(/<(thinking|think)>([\s\S]*)$/i);
+    if (unclosed) {
+      const content = (unclosed[2] || "").trim();
+      if (content) thinkingParts.push(content);
+      cleanText = cleanText.replace(/<(thinking|think)>[\s\S]*$/i, "");
+    }
+    
+    return {
+      thinking: thinkingParts.join("\n\n").trim(),
+      cleanText: cleanText.trim()
+    };
+  }
+  
   function formatMessageContent(content, isStreaming = false) {
     if (!content) return "";
+    
+    // 过滤掉 thinking 标签（渲染时不显示，避免正文里出现"<thinking>xxx</thinking>"）
+    // 流式过程中也要处理未闭合的 <thinking> 开头
+    if (content.includes("<thinking") || content.includes("<think") || content.includes("[thinking") || content.includes("[think")) {
+      // 完整配对的直接删
+      content = content
+        .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+        .replace(/<think>[\s\S]*?<\/think>/gi, "")
+        .replace(/\[thinking\][\s\S]*?\[\/thinking\]/gi, "")
+        .replace(/\[think\][\s\S]*?\[\/think\]/gi, "");
+      // 未闭合的开标签（流式中）：后面的内容暂时隐藏
+      content = content
+        .replace(/<(thinking|think)>[\s\S]*$/i, "")
+        .replace(/\[(thinking|think)\][\s\S]*$/i, "");
+      content = content.trim();
+    }
     
     // 使用 marked.js 渲染 Markdown
     if (window.marked) {
@@ -1830,6 +1886,16 @@
       } else {
         // 普通流式输出
         result = await fallbackToStream(conn, limitedMsgs, globalInstruction, chat.model, assistantMsgId, chat.id);
+      }
+      
+      // 兜底：某些中转站会把 thinking 内容以 <thinking> 标签形式塞进正文
+      // 这里统一提取出来，保持显示一致性
+      if (result.text && !result.thinking) {
+        const extracted = extractInlineThinking(result.text);
+        if (extracted.thinking) {
+          result.thinking = extracted.thinking;
+          result.text = extracted.cleanText;
+        }
       }
       
       // 更新最终结果
