@@ -2147,7 +2147,13 @@ ${memoryTexts}
 
   // ========== 全局指令 ==========
   function buildFullInstruction(serverMemoryPrompt) {
-    let instruction = state.globalInstruction || "";
+    // 注入当前日期（读取用户设备本地时间）
+    const _now = new Date();
+    const _dateStr = _now.getFullYear() + "年" + (_now.getMonth()+1) + "月" + _now.getDate() + "日";
+    const _weekDays = ["日","一","二","三","四","五","六"];
+    const _timeStr = _now.getHours().toString().padStart(2,"0") + ":" + _now.getMinutes().toString().padStart(2,"0");
+    const _datePrefix = "当前时间：" + _dateStr + " 星期" + _weekDays[_now.getDay()] + " " + _timeStr + "\n\n";
+    let instruction = _datePrefix + (state.globalInstruction || "");
     
     const items = state.memoryItems || [];
     const enabled = items.filter((m) => m.enabled !== false);
