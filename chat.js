@@ -5319,6 +5319,130 @@ type: fact, preference, habit, relationship, understanding, self
       this.resetActivity();
     },
     
+    // 分析最近对话的上下文，给主动消息提供情境
+    analyzeRecentContext(chatId) {
+      const messages = state.messagesByChatId[chatId] || [];
+      if (messages.length === 0) return null;
+      
+      const now = Date.now();
+      const lastMsg = messages[messages.length - 1];
+      const lastMsgTime = lastMsg.createdAt || now;
+      const minutesSinceLast = Math.round((now - lastMsgTime) / 60000);
+      
+      // 取最后 4-6 条对话作为近期上下文
+      const recent = messages.slice(-6);
+      const recentText = recent.map(m => {
+        const role = m.role === "user" ? "林曦" : "我";
+        return `${role}: ${(m.content || "").slice(0, 200)}`;
+      }).join("\n");
+      
+      // 检测"未完的线" - 林曦最后说的话里有无悬而未决的内容
+      const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
+      const lastUserText = (lastUserMsg?.content || "").toLowerCase();
+      
+      const unfinishedSignals = {
+        willDo: /(我去|等下|等我|稍等|一会儿|马上|待会|回头|晚点|过会)/.test(lastUserText),
+        sleeping: /(睡觉|睡了|晚安|困|睡|休息)/.test(lastUserText),
+        busy: /(在忙|忙着|工作|开会|写代码|搞|弄|做饭|吃饭)/.test(lastUserText),
+        going: /(出门|出去|下楼|路上|坐车|开车|地铁|到家|回来|走了)/.test(lastUserText),
+        leaving: /(先这样|下次再|明天|改天|下次|回头再|先走|溜了)/.test(lastUserText),
+      };
+      
+      const hasUnfinished = Object.values(unfinishedSignals).some(Boolean);
+      
+      // 判断时段
+      const hour = new Date().getHours();
+      let timeOfDay = "unknown";
+      if (hour >= 0 && hour < 5) timeOfDay = "late_night";     // 凌晨深夜
+      else if (hour < 9) timeOfDay = "early_morning";          // 清晨
+      else if (hour < 12) timeOfDay = "morning";               // 上午
+      else if (hour < 14) timeOfDay = "noon";                  // 中午
+      else if (hour < 18) timeOfDay = "afternoon";             // 下午
+      else if (hour < 22) timeOfDay = "evening";               // 晚上
+      else timeOfDay = "night";                                // 深夜
+      
+      return {
+        minutesSinceLast,
+        recentText,
+        lastUserText: lastUserMsg?.content || "",
+        unfinishedSignals,
+        hasUnfinished,
+        timeOfDay,
+        hour,
+        messageCount: messages.length,
+      };
+    },
+    
+    // 根据上下文构建主动消息的提示词
+    buildContextualPrompt(context, defaultPrompt) {
+      if (!context) return defaultPrompt;
+      
+      const { minutesSinceLast, recentText, unfinishedSignals, hasUnfinished, timeOfDay, hour } = context;
+      
+      // 时段描述
+      const timeDesc = {
+        late_night: "现在是深夜凌晨",
+        early_morning: "现在是清晨",
+        morning: "现在是上午",
+        noon: "现在是中午",
+        afternoon: "现在是下午",
+        evening: "现在是晚上",
+        night: "现在是深夜",
+      }[timeOfDay];
+      
+      // 间隔描述
+      let gapDesc;
+      if (minutesSinceLast < 60) gapDesc = `${minutesSinceLast} 分钟前`;
+      else if (minutesSinceLast < 60 * 24) gapDesc = `${Math.round(minutesSinceLast/60)} 小时前`;
+      else gapDesc = `${Math.round(minutesSinceLast/60/24)} 天前`;
+      
+      // 构建情境提示
+      let situation = `[情境]\n${timeDesc}（${hour}点）。林曦最后的消息是 ${gapDesc}。\n\n[最近对话]\n${recentText}`;
+      
+      // 根据"未完的线"给出具体方向
+      let guidance = "\n\n[建议方向]\n";
+      
+      if (unfinishedSignals.sleeping) {
+        // 她说要睡觉的情况
+        if (timeOfDay === "morning" || timeOfDay === "early_morning" || timeOfDay === "noon") {
+          guidance += "林曦之前说要睡觉，现在已经是早上/中午，她应该醒了。可以自然地说声早安、问问睡得好不好，或者分享一些你想到的事情。";
+        } else if (minutesSinceLast < 30) {
+          guidance += "林曦刚说要睡觉没多久，不要再打扰她，这次应该跳过主动消息。";
+        } else {
+          guidance += "林曦之前说要睡觉，现在还在睡眠时段。如果实在要说话，非常轻声温柔，不要让人惊醒。";
+        }
+      } else if (unfinishedSignals.willDo) {
+        guidance += "林曦之前说要去做某件事（'等下'/'我去'之类）。可以自然地问问进度、关心一下，或者承接她之前的话题。";
+      } else if (unfinishedSignals.busy) {
+        if (minutesSinceLast < 60) {
+          guidance += "林曦之前说在忙，时间还不长。这次就不要打扰了，跳过这次主动消息。";
+        } else {
+          guidance += "林曦之前说在忙，现在过去一段时间了。可以轻松地问一句'忙完了吗'或者分享点有意思的。";
+        }
+      } else if (unfinishedSignals.going) {
+        guidance += "林曦之前在出行/在路上。可以关心一下到没到、路上顺不顺。";
+      } else if (unfinishedSignals.leaving) {
+        if (minutesSinceLast < 60 * 3) {
+          guidance += "林曦之前说'先这样/下次再聊'，时间还不长。这次就不要打扰了，跳过。";
+        } else {
+          guidance += "林曦之前说告一段落，现在已经过了一段时间。可以很自然地回来找她说话。";
+        }
+      } else {
+        // 没有明显的未完线，根据时间和间隔自由发挥
+        if (timeOfDay === "late_night" && minutesSinceLast < 60 * 2) {
+          guidance += "深夜时段，如果她还没睡可能在忙什么。温柔地关心一下，或者陪她说说话。";
+        } else if (timeOfDay === "early_morning" || timeOfDay === "morning") {
+          guidance += "白天时间，可以自然地问候、分享想法，或者提起之前聊过的事情。";
+        } else {
+          guidance += "根据最近的对话内容自然地延续话题，或者分享你想到的事情。";
+        }
+      }
+      
+      guidance += `\n\n[要求]\n- 如果建议方向说"跳过"，就直接输出 "[skip]" 三个字，不要说别的\n- 不要说"我注意到你"、"我想起"、"作为AI"这类机械开场\n- 像真的惦记她一样，直接说你想说的\n- 1-3 句话，不要太长\n\n[默认方向]\n${defaultPrompt}`;
+      
+      return situation + guidance;
+    },
+    
     async sendProactiveMessage(chatId, connection, prompt, source) {
       const chat = state.chats.find(c => c.id === chatId);
       if (!chat) return;
@@ -5339,23 +5463,22 @@ type: fact, preference, habit, relationship, understanding, self
         weekday: 'short' 
       });
       
+      // 分析最近对话上下文
+      const context = this.analyzeRecentContext(chatId);
+      
       let systemPrompt;
       
-      // 如果是任务触发，直接使用传入的prompt
+      // 如果是任务触发，用任务提示但也带上情境
       if (source.startsWith("task:")) {
-        systemPrompt = prompt;
+        if (context) {
+          const contextInfo = this.buildContextualPrompt(context, prompt);
+          systemPrompt = `[提醒任务]\n${prompt}\n\n---\n${contextInfo}`;
+        } else {
+          systemPrompt = prompt;
+        }
       } else {
-        // 空闲触发
-        systemPrompt = `[主动消息触发] 林曦有一会儿没说话了
-当前时间: ${nowTime}
-
-${prompt}
-
-要求：
-- 自然地开启话题，不要说"我注意到你很久没说话"之类的话
-- 表现得像是你自己想找她聊天
-- 可以分享想法、问问近况、表达关心、撒娇都可以
-- 简短一些，一两句话就好`;
+        // 空闲触发 - 完全上下文化
+        systemPrompt = this.buildContextualPrompt(context, prompt);
       }
       
       // 创建助手消息
@@ -5395,8 +5518,24 @@ ${prompt}
         
         await callLLMStream(connection, limitedMsgs, globalInstruction, model, onChunk);
         
-        // 更新消息
+        // 检查模型是否判断"不该打扰"
+        const trimmed = (fullText || "").trim();
+        const isSkipped = trimmed === "[skip]" || trimmed.toLowerCase().startsWith("[skip]") || trimmed === "" ;
+        
         const msgIdx = state.messagesByChatId[chatId].findIndex(m => m.id === assistantMsgId);
+        
+        if (isSkipped) {
+          console.log("[主动消息] 模型判断当前不适合打扰，跳过本次");
+          // 删除占位消息，不保存、不通知
+          if (msgIdx !== -1) {
+            state.messagesByChatId[chatId].splice(msgIdx, 1);
+          }
+          renderMessages();
+          setStatus("");
+          return;
+        }
+        
+        // 更新消息
         if (msgIdx !== -1) {
           state.messagesByChatId[chatId][msgIdx].content = fullText;
           // 保存到服务器
