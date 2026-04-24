@@ -1431,15 +1431,9 @@
     }
     if (els.wanderTriggerBtn) {
       els.wanderTriggerBtn.addEventListener("click", () => {
-        if (window.opener && window.opener.wander) {
-          window.opener.wander();
-          alert("已触发漫游，回到主页面看进度");
-        } else if (window.wander) {
-          window.wander();
-          alert("已触发漫游");
-        } else {
-          alert("请先回到主聊天页面（index.html），漫游功能在那里生效");
-        }
+        // 写入触发标记，主页面 poll 时会检测到并执行漫游
+        localStorage.setItem("llmhub_wander_trigger", String(Date.now()));
+        alert("已发送漫游指令！\n\n回到主聊天页面，澈会在30秒内出门逛。\n完成后状态栏会提示「🌿 澈逛完回来了」。");
       });
     }
     if (els.wanderLogsBtn) {

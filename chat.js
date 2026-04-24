@@ -5232,6 +5232,16 @@ type: fact, preference, habit, relationship, understanding, self
     
     poll() {
       if (this.isSending) return;
+      
+      // 检测手动漫游触发（来自设置页的按钮）
+      const manualTrigger = localStorage.getItem("llmhub_wander_trigger");
+      if (manualTrigger) {
+        localStorage.removeItem("llmhub_wander_trigger");
+        console.log("[漫游] 检测到手动触发信号");
+        this.triggerWander();
+        return;
+      }
+      
       const cfg = state.proactiveMessage || {};
       if (!cfg.enabled) return;
       
