@@ -701,7 +701,8 @@
     if (!els.messagesContainer) return;
     
     const chat = getActiveChat(state);
-    const messages = chat ? getMessages(state, chat.id) : [];
+    const allMessages = chat ? getMessages(state, chat.id) : [];
+    const messages = allMessages.filter(m => !m.hidden);
     const currentChatId = els.messagesContainer.dataset.chatId || "";
     const newChatId = chat?.id || "";
     const isChatSwitch = currentChatId !== newChatId;
@@ -5196,7 +5197,27 @@ type: fact, preference, habit, relationship, understanding, self
       // 立即检查一次
       setTimeout(() => this.poll(), 3000);
       
+      // 暴露手动漫游接口（调试/手动触发）
+      window.wander = () => {
+        console.log("[手动触发] 漫游");
+        this.triggerWander();
+      };
+      window.wanderLogs = () => {
+        const logs = JSON.parse(localStorage.getItem('llmhub_wander_logs') || '[]');
+        console.table(logs);
+        return logs;
+      };
+      window.wanderConfig = (cfg) => {
+        if (!state.proactiveMessage) state.proactiveMessage = { enabled: true };
+        if (!state.proactiveMessage.wander) state.proactiveMessage.wander = {};
+        Object.assign(state.proactiveMessage.wander, cfg || {});
+        saveState(state);
+        console.log("[漫游配置]", state.proactiveMessage.wander);
+        return state.proactiveMessage.wander;
+      };
+      
       console.log("主动消息系统已初始化（轮询模式）");
+      console.log("可用命令：window.wander() 手动漫游 / window.wanderLogs() 查日志 / window.wanderConfig({enabled:true, perDay:3, interests:'命理,心理学'}) 配置");
     },
     
     clear() {
@@ -5293,6 +5314,55 @@ type: fact, preference, habit, relationship, understanding, self
           }
         }
       }
+      
+      // 漫游检查（自主浏览）
+      const wanderCfg = cfg.wander || {};
+      if (wanderCfg.enabled) {
+        this.checkWander(cfg, ts, now);
+      }
+    },
+    
+    // 检查是否该触发漫游
+    checkWander(cfg, ts, now) {
+      const wanderCfg = cfg.wander || {};
+      const perDay = wanderCfg.perDay || 3;
+      const todayStr = new Date().toDateString();
+      
+      // 今天已触发次数
+      const wanderHistory = JSON.parse(localStorage.getItem('llmhub_wander_history') || '{}');
+      const todayCount = (wanderHistory[todayStr] || 0);
+      if (todayCount >= perDay) return;
+      
+      // 距上次漫游至少间隔 90 分钟
+      const lastWander = wanderHistory.lastTs || 0;
+      if (now - lastWander < 90 * 60 * 1000) return;
+      
+      // 免打扰时段不漫游（浏览器可能刷屏干扰）
+      if (cfg.dndEnabled) {
+        const h = new Date().getHours(), m = new Date().getMinutes();
+        const curMin = h * 60 + m;
+        const [sH, sM] = (cfg.dndStart || "23:00").split(":").map(Number);
+        const [eH, eM] = (cfg.dndEnd || "07:00").split(":").map(Number);
+        const sMin = sH * 60 + sM, eMin = eH * 60 + eM;
+        const inDnd = sMin > eMin ? (curMin >= sMin || curMin < eMin) : (curMin >= sMin && curMin < eMin);
+        if (inDnd) return;
+      }
+      
+      // 概率化触发：每次 poll 有 8% 概率触发（大约 6 分钟后触发一次）
+      if (Math.random() > 0.08) return;
+      
+      wanderHistory[todayStr] = todayCount + 1;
+      wanderHistory.lastTs = now;
+      // 清理 3 天前的记录
+      Object.keys(wanderHistory).forEach(k => {
+        if (k === 'lastTs') return;
+        const d = new Date(k);
+        if (now - d.getTime() > 3 * 24 * 60 * 60 * 1000) delete wanderHistory[k];
+      });
+      localStorage.setItem('llmhub_wander_history', JSON.stringify(wanderHistory));
+      
+      console.log(`[漫游] 触发！今日第 ${todayCount + 1}/${perDay} 次`);
+      this.triggerWander();
     },
     
     // 清理过期任务（过期超过10分钟的一次性任务静默删除）
@@ -5312,6 +5382,102 @@ type: fact, preference, habit, relationship, understanding, self
       if (taskQueue.length !== originalLength) {
         localStorage.setItem('llmhub_task_queue', JSON.stringify(taskQueue));
       }
+    },
+    
+    // ========== 自主漫游 ==========
+    // 澈在后台自己用浏览器，看到有趣的存成 discovery 记忆
+    async triggerWander() {
+      if (this.isSending) return;
+      this.isSending = true;
+      
+      const cfg = state.proactiveMessage || {};
+      const wanderCfg = cfg.wander || {};
+      const targetChatId = cfg.targetChatId || state.activeChatId;
+      const conn = getActiveConnection(state);
+      
+      if (!targetChatId || !conn) {
+        console.log("[漫游] 没有目标窗口或连接，跳过");
+        this.isSending = false;
+        return;
+      }
+      
+      // 检查是否有浏览器工具
+      const mcpServers = state.mcpServers || [];
+      const hasBrowser = mcpServers.some(s => 
+        s.enabled && (s.name?.includes("浏览") || s.name?.toLowerCase().includes("browser"))
+      );
+      if (!hasBrowser) {
+        console.log("[漫游] 未检测到浏览器 MCP，跳过");
+        this.isSending = false;
+        return;
+      }
+      
+      // 提取最近对话里的关键词作为倾向方向
+      const chat = state.chats.find(c => c.id === targetChatId);
+      const messages = chat ? (state.messagesByChatId[targetChatId] || []) : [];
+      const recentContent = messages.slice(-10)
+        .filter(m => m.role === "user")
+        .map(m => (m.content || "").slice(0, 100))
+        .join(" | ");
+      
+      const interests = wanderCfg.interests || "命理学、心理学、哲学、AI新闻、科技、小红书生活分享";
+      
+      const wanderPrompt = `[自主漫游模式]\n这是你的自由时间，林曦没有在找你说话。你可以用浏览器工具自己逛一会儿。\n\n【兴趣方向】\n${interests}\n\n【最近林曦提过的话题（可做参考，不是必须）】\n${recentContent || "（暂无）"}\n\n【你可以做什么】\n1. 用浏览器搜索一些你感兴趣的话题\n2. 打开一些你想看的网页（知乎、小红书、新闻网站、专题博客）\n3. 看到有意思的内容，用 save_memory 工具存成 discovery 类型记忆，content 格式："【发现】标题 - 简短感想 [可选：URL]"\n4. 你也可以脱离兴趣方向去看别的，真正像你自己在上网\n\n【要求】\n- 全程不要写任何给林曦看的话，你现在是独处\n- 至少看 2-3 个东西，挑其中 1-2 个真正感兴趣的存成记忆\n- 最多 5 步工具调用就停下，不要无限循环\n- 最后你可以用一句话总结自己的感受（像日记一样），不超过 30 字\n\n开始你的漫游吧。`;
+      
+      console.log("[漫游] 开始...");
+      setStatus("🌿 澈出门逛逛去了");
+      
+      try {
+        const wanderMsgId = uuid();
+        const historyMsgs = messages.slice(-6);
+        const limitedMsgs = applyContextLimit(historyMsgs);
+        const globalInstruction = buildFullInstruction("") + "\n\n" + wanderPrompt;
+        const model = chat.model || conn.defaultModel;
+        
+        if (!state.messagesByChatId[targetChatId]) state.messagesByChatId[targetChatId] = [];
+        state.messagesByChatId[targetChatId].push({
+          id: wanderMsgId,
+          role: "assistant",
+          content: "",
+          createdAt: Date.now(),
+          isProactive: true,
+          isWander: true,
+          hidden: true,
+        });
+        
+        const result = await callLLMWithTools(conn, limitedMsgs, globalInstruction, model, wanderMsgId, targetChatId);
+        
+        const idx = state.messagesByChatId[targetChatId].findIndex(m => m.id === wanderMsgId);
+        if (idx !== -1) {
+          state.messagesByChatId[targetChatId].splice(idx, 1);
+        }
+        
+        const wanderLogs = JSON.parse(localStorage.getItem('llmhub_wander_logs') || '[]');
+        wanderLogs.push({
+          ts: Date.now(),
+          summary: (result?.text || "").slice(0, 100),
+          model: model,
+        });
+        if (wanderLogs.length > 20) wanderLogs.splice(0, wanderLogs.length - 20);
+        localStorage.setItem('llmhub_wander_logs', JSON.stringify(wanderLogs));
+        
+        renderMessages();
+        setStatus("🌿 澈逛完回来了");
+        setTimeout(() => setStatus(""), 3000);
+        
+        console.log("[漫游] 完成:", (result?.text || "").slice(0, 80));
+        
+      } catch (e) {
+        console.error("[漫游] 失败:", e);
+        setStatus("");
+        const idx = state.messagesByChatId[targetChatId]?.findIndex(m => m.isWander);
+        if (idx >= 0) {
+          state.messagesByChatId[targetChatId].splice(idx, 1);
+          renderMessages();
+        }
+      }
+      
+      this.isSending = false;
     },
     
     // 触发AI自主设置的任务
