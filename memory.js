@@ -1456,7 +1456,27 @@
     }
   }
 
-function init() {
+async function loadChatsForProactive() {
+    // 从服务器拉聊天列表，用于主动消息目标下拉框
+    if (!window.LLMHubAPI) return;
+    try {
+      const result = await window.LLMHubAPI.getChats(100);
+      if (result && Array.isArray(result.chats)) {
+        state.chats = result.chats.map(c => ({
+          id: c.id,
+          title: c.title || "新对话",
+          updatedAt: new Date(c.updated_at).getTime(),
+          createdAt: new Date(c.created_at).getTime(),
+        }));
+        // 拉到后重新渲染一次
+        renderProactiveMessage();
+      }
+    } catch (e) {
+      console.warn("[memory] 拉取聊天列表失败:", e);
+    }
+  }
+  
+  function init() {
     initDomRefs();
     renderGlobalInstruction();
     renderGenerationConfig();
@@ -1467,6 +1487,8 @@ function init() {
     renderMemoryItems();
     initEventListeners();
     initServerMemoryEditListeners();
+    // 异步拉取聊天列表，让"目标窗口"下拉能显示所有窗口
+    loadChatsForProactive();
   }
 
   if (document.readyState === "loading") {
