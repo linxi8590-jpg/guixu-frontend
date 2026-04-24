@@ -3674,6 +3674,9 @@ ${modelDescriptions}
           return { role: m.role, content: m.content };
         });
         
+        // Prompt Caching: 消息历史缓存（使用共用函数）
+        applyAnthropicMessageCache(bodyMessages);
+        
         const body = {
           model,
           max_tokens: maxTokens,
@@ -3866,6 +3869,41 @@ ${modelDescriptions}
     };
   }
 
+  // ========== Prompt Caching 辅助函数 ==========
+  // 给 Anthropic 消息数组打缓存标记（在倒数第二条消息上）
+  // 这样前 N-1 条会被缓存，下轮对话大概率命中
+  function applyAnthropicMessageCache(bodyMessages) {
+    if (!Array.isArray(bodyMessages) || bodyMessages.length < 3) return bodyMessages;
+    
+    const cacheIdx = bodyMessages.length - 2;
+    const targetMsg = bodyMessages[cacheIdx];
+    if (!targetMsg) return bodyMessages;
+    
+    if (typeof targetMsg.content === "string") {
+      targetMsg.content = [{
+        type: "text",
+        text: targetMsg.content,
+        cache_control: { type: "ephemeral" }
+      }];
+    } else if (Array.isArray(targetMsg.content) && targetMsg.content.length > 0) {
+      const lastBlock = targetMsg.content[targetMsg.content.length - 1];
+      if (lastBlock && !lastBlock.cache_control) {
+        lastBlock.cache_control = { type: "ephemeral" };
+      }
+    }
+    return bodyMessages;
+  }
+  
+  // 给 Anthropic system prompt 打缓存标记
+  function applyAnthropicSystemCache(systemText) {
+    if (!systemText || !systemText.trim()) return null;
+    return [{
+      type: "text",
+      text: systemText,
+      cache_control: { type: "ephemeral" }
+    }];
+  }
+  
   async function callLLM(connection, messages, globalInstruction, overrideModel) {
     const provider = normalizeProvider(connection.provider);
     const baseUrl = connection.baseUrl;
@@ -4012,6 +4050,9 @@ ${modelDescriptions}
         content: m.content,
       }));
       
+      // Prompt Caching: 消息历史缓存
+      applyAnthropicMessageCache(bodyMessages);
+      
       const reqBody = {
         model,
         max_tokens: maxTokens,
@@ -4019,8 +4060,10 @@ ${modelDescriptions}
         temperature,
       };
       
+      // Prompt Caching: system 缓存
       if (globalInstruction && globalInstruction.trim()) {
-        reqBody.system = globalInstruction;
+        const sysCache = applyAnthropicSystemCache(globalInstruction);
+        if (sysCache) reqBody.system = sysCache;
       }
       
       const resp = await fetch(url, {
@@ -4045,12 +4088,19 @@ ${modelDescriptions}
       }
       
       const usage = data.usage || {};
+      const cacheRead = usage.cache_read_input_tokens || 0;
+      const cacheCreation = usage.cache_creation_input_tokens || 0;
+      if (cacheRead > 0) {
+        console.log(`[Prompt Cache] 命中 ${cacheRead} tokens（省钱 ~${Math.round(cacheRead * 0.9)} tokens 的费用）`);
+      }
       return {
         text: data.content[0].text.trim(),
         usage: {
           promptTokens: usage.input_tokens || 0,
           completionTokens: usage.output_tokens || 0,
           totalTokens: (usage.input_tokens || 0) + (usage.output_tokens || 0),
+          cacheReadTokens: cacheRead,
+          cacheCreationTokens: cacheCreation,
         },
       };
     }
@@ -4241,6 +4291,9 @@ ${modelDescriptions}
         return { role: m.role, content: m.content };
       });
       
+      // Prompt Caching: 消息历史缓存
+      applyAnthropicMessageCache(bodyMessages);
+      
       const reqBody = {
         model,
         max_tokens: maxTokens,
@@ -4249,8 +4302,10 @@ ${modelDescriptions}
         stream: true,
       };
       
+      // Prompt Caching: system 缓存
       if (globalInstruction && globalInstruction.trim()) {
-        reqBody.system = globalInstruction;
+        const sysCache = applyAnthropicSystemCache(globalInstruction);
+        if (sysCache) reqBody.system = sysCache;
       }
       
       const resp = await fetchWithTimeout(url, {
@@ -4418,20 +4473,30 @@ ${modelDescriptions}
           }
           
           if (json.type === "message_start" && json.message?.usage) {
+            const u = json.message.usage;
             usage = {
-              promptTokens: json.message.usage.input_tokens || 0,
+              promptTokens: u.input_tokens || 0,
               completionTokens: 0,
-              totalTokens: json.message.usage.input_tokens || 0,
+              totalTokens: u.input_tokens || 0,
+              cacheReadTokens: u.cache_read_input_tokens || 0,
+              cacheCreationTokens: u.cache_creation_input_tokens || 0,
             };
+            if (usage.cacheReadTokens > 0) {
+              console.log(`[Prompt Cache] 流式命中 ${usage.cacheReadTokens} tokens`);
+            }
           }
           
           if (json.type === "message_delta") {
             if (json.usage) {
               const prevInput = usage ? usage.promptTokens : 0;
+              const prevCacheRead = usage ? usage.cacheReadTokens : 0;
+              const prevCacheCreate = usage ? usage.cacheCreationTokens : 0;
               usage = {
                 promptTokens: prevInput,
                 completionTokens: json.usage.output_tokens || 0,
                 totalTokens: prevInput + (json.usage.output_tokens || 0),
+                cacheReadTokens: prevCacheRead,
+                cacheCreationTokens: prevCacheCreate,
               };
             }
             if (json.delta?.stop_reason) {
@@ -4636,20 +4701,30 @@ ${modelDescriptions}
             onChunk(json.delta.text);
           }
           if (json.type === "message_delta" && json.usage) {
-            // 合并 output tokens（保留之前的 input tokens）
+            // 合并 output tokens（保留之前的 input tokens 和 cache 信息）
             const prevInput = usage ? usage.promptTokens : 0;
+            const prevCacheRead = usage ? (usage.cacheReadTokens || 0) : 0;
+            const prevCacheCreate = usage ? (usage.cacheCreationTokens || 0) : 0;
             usage = {
               promptTokens: prevInput,
               completionTokens: json.usage.output_tokens || 0,
               totalTokens: prevInput + (json.usage.output_tokens || 0),
+              cacheReadTokens: prevCacheRead,
+              cacheCreationTokens: prevCacheCreate,
             };
           }
           if (json.type === "message_start" && json.message?.usage) {
+            const u = json.message.usage;
             usage = {
-              promptTokens: json.message.usage.input_tokens || 0,
+              promptTokens: u.input_tokens || 0,
               completionTokens: 0,
-              totalTokens: json.message.usage.input_tokens || 0,
+              totalTokens: u.input_tokens || 0,
+              cacheReadTokens: u.cache_read_input_tokens || 0,
+              cacheCreationTokens: u.cache_creation_input_tokens || 0,
             };
+            if (usage.cacheReadTokens > 0) {
+              console.log(`[Prompt Cache] processAnthropicStream 命中 ${usage.cacheReadTokens} tokens`);
+            }
           }
         } catch (e) {}
       }
