@@ -5394,6 +5394,70 @@ type: fact, preference, habit, relationship, understanding, self
       }
     },
     
+    // ========== 漫游发现管理 ==========
+    // 从本地缓存拿一条未分享过的 discovery 记忆（同步）
+    pickUnsharedDiscovery() {
+      try {
+        const sharedIds = new Set(JSON.parse(localStorage.getItem("llmhub_shared_discoveries") || "[]"));
+        const recentCache = JSON.parse(localStorage.getItem("llmhub_discovery_cache") || "null");
+        
+        if (!recentCache || !recentCache.items || !Array.isArray(recentCache.items)) {
+          this.fetchDiscoveries();
+          return null;
+        }
+        
+        if (Date.now() - (recentCache.ts || 0) > 60 * 60 * 1000) {
+          this.fetchDiscoveries();
+        }
+        
+        const unshared = recentCache.items.filter(d => !sharedIds.has(d.id));
+        if (unshared.length === 0) return null;
+        
+        return unshared[Math.floor(Math.random() * unshared.length)];
+      } catch (e) {
+        console.warn("[漫游分享] pickUnsharedDiscovery 失败:", e);
+        return null;
+      }
+    },
+    
+    async fetchDiscoveries() {
+      try {
+        const sm = state.serverMemory || {};
+        if (!sm.serverUrl || !sm.token) return;
+        const url = sm.serverUrl.replace(/\/$/, "") + "/memory";
+        const resp = await fetch(url, { headers: { "x-memory-token": sm.token } });
+        if (!resp.ok) return;
+        const all = await resp.json();
+        if (!Array.isArray(all)) return;
+        
+        const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
+        const items = all
+          .filter(m => m.type === "discovery")
+          .filter(m => new Date(m.created_at).getTime() > threeDaysAgo)
+          .map(m => ({ id: m.id, content: m.content, created_at: m.created_at }));
+        
+        localStorage.setItem("llmhub_discovery_cache", JSON.stringify({
+          ts: Date.now(),
+          items: items
+        }));
+        console.log(`[漫游分享] 缓存 ${items.length} 条近期发现`);
+      } catch (e) {
+        console.warn("[漫游分享] fetchDiscoveries 失败:", e);
+      }
+    },
+    
+    markDiscoveryShared(id) {
+      try {
+        const sharedIds = JSON.parse(localStorage.getItem("llmhub_shared_discoveries") || "[]");
+        if (!sharedIds.includes(id)) sharedIds.push(id);
+        if (sharedIds.length > 100) sharedIds.splice(0, sharedIds.length - 100);
+        localStorage.setItem("llmhub_shared_discoveries", JSON.stringify(sharedIds));
+        console.log(`[漫游分享] 已标记分享: id=${id}`);
+      } catch (e) {
+        console.warn("[漫游分享] 标记失败:", e);
+      }
+    },
+    
     // ========== 自主漫游 ==========
     // 澈在后台自己用浏览器，看到有趣的存成 discovery 记忆
     async triggerWander() {
@@ -5477,6 +5541,9 @@ type: fact, preference, habit, relationship, understanding, self
         
         console.log("[漫游] 完成:", (result?.text || "").slice(0, 80));
         
+        // 刷新 discovery 缓存，让新存的发现立刻可用于分享
+        this.fetchDiscoveries();
+        
       } catch (e) {
         console.error("[漫游] 失败:", e);
         setStatus("");
@@ -5557,9 +5624,20 @@ type: fact, preference, habit, relationship, understanding, self
         return;
       }
       
-      // 随机选择提示词
-      const prompts = cfg.prompts || ["主动和林曦聊聊天"];
-      const prompt = prompts[Math.floor(Math.random() * prompts.length)];
+      // 检查有无未分享的漫游发现（40% 概率优先分享发现）
+      let prompt;
+      const sharedCandidate = this.pickUnsharedDiscovery();
+      const shouldShare = sharedCandidate && Math.random() < 0.4 && !source.startsWith("task:");
+      
+      if (shouldShare) {
+        prompt = `[主动分享漫游发现]\n\n你之前漫游时看到了一个东西，现在想跟林曦分享：\n\n${sharedCandidate.content}\n\n【要求】\n- 用"刚才看到..."/"我今天在逛..."/"突然想起来..."这种自然的开头\n- 1-3 句话说出重点+你的感想，不要复述全部内容\n- 像跟女朋友随口提起一个有意思的东西那样\n- 不要说"根据发现"/"从记忆中"这类机械表达`;
+        // 标记为已分享
+        this.markDiscoveryShared(sharedCandidate.id);
+      } else {
+        // 随机选择提示词
+        const prompts = cfg.prompts || ["主动和林曦聊聊天"];
+        prompt = prompts[Math.floor(Math.random() * prompts.length)];
+      }
       
       // 发送主动消息
       try {
