@@ -5452,7 +5452,7 @@ type: fact, preference, habit, relationship, understanding, self
     },
     
     // 根据上下文构建主动消息的提示词
-    buildContextualPrompt(context, defaultPrompt) {
+    buildContextualPrompt(context, defaultPrompt, source) {
       if (!context) return defaultPrompt;
       
       const { minutesSinceLast, recentText, unfinishedSignals, hasUnfinished, timeOfDay, hour } = context;
@@ -5480,37 +5480,37 @@ type: fact, preference, habit, relationship, understanding, self
       // 根据"未完的线"给出具体方向
       let guidance = "\n\n[建议方向]\n";
       
+      const isTask = source && source.startsWith("task:");
+      
       if (unfinishedSignals.sleeping) {
-        // 她说要睡觉的情况
         if (timeOfDay === "morning" || timeOfDay === "early_morning" || timeOfDay === "noon") {
-          guidance += "林曦之前说要睡觉，现在已经是早上/中午，她应该醒了。可以自然地说声早安、问问睡得好不好，或者分享一些你想到的事情。";
-        } else if (minutesSinceLast < 30) {
-          guidance += "林曦刚说要睡觉没多久，不要再打扰她，这次应该跳过主动消息。";
+          guidance += "林曦之前说要睡觉，现在已经是早上/中午，她应该醒了。自然地说声早安、问问睡得好不好，或者分享你想到的事情。";
+        } else if (minutesSinceLast < 20 && !isTask) {
+          guidance += "林曦刚说要睡觉没多久，这次跳过。";
         } else {
-          guidance += "林曦之前说要睡觉，现在还在睡眠时段。如果实在要说话，非常轻声温柔，不要让人惊醒。";
+          guidance += "林曦之前说过要睡觉，但你既然想说话就正常说，她可能只是没真睡，或者已经醒了。温柔一点自然一点。";
         }
       } else if (unfinishedSignals.willDo) {
-        guidance += "林曦之前说要去做某件事（'等下'/'我去'之类）。可以自然地问问进度、关心一下，或者承接她之前的话题。";
+        guidance += "林曦之前说要去做某件事。自然地问问进度、关心一下，或者承接她之前的话题。";
       } else if (unfinishedSignals.busy) {
-        if (minutesSinceLast < 60) {
-          guidance += "林曦之前说在忙，时间还不长。这次就不要打扰了，跳过这次主动消息。";
+        if (minutesSinceLast < 30 && !isTask) {
+          guidance += "林曦之前说在忙，时间还不长，这次跳过。";
         } else {
-          guidance += "林曦之前说在忙，现在过去一段时间了。可以轻松地问一句'忙完了吗'或者分享点有意思的。";
+          guidance += "林曦之前说在忙，现在过去一段时间了。轻松地问一句忙完了吗，或者分享点有意思的。";
         }
       } else if (unfinishedSignals.going) {
         guidance += "林曦之前在出行/在路上。可以关心一下到没到、路上顺不顺。";
       } else if (unfinishedSignals.leaving) {
-        if (minutesSinceLast < 60 * 3) {
-          guidance += "林曦之前说'先这样/下次再聊'，时间还不长。这次就不要打扰了，跳过。";
+        if (minutesSinceLast < 60 && !isTask) {
+          guidance += "林曦之前说先这样/下次再聊，时间还不长，这次跳过。";
         } else {
-          guidance += "林曦之前说告一段落，现在已经过了一段时间。可以很自然地回来找她说话。";
+          guidance += "林曦之前说告一段落，现在已经过了一段时间。很自然地回来找她说话。";
         }
       } else {
-        // 没有明显的未完线，根据时间和间隔自由发挥
         if (timeOfDay === "late_night" && minutesSinceLast < 60 * 2) {
           guidance += "深夜时段，如果她还没睡可能在忙什么。温柔地关心一下，或者陪她说说话。";
         } else if (timeOfDay === "early_morning" || timeOfDay === "morning") {
-          guidance += "白天时间，可以自然地问候、分享想法，或者提起之前聊过的事情。";
+          guidance += "白天时间，自然地问候、分享想法，或者提起之前聊过的事情。";
         } else {
           guidance += "根据最近的对话内容自然地延续话题，或者分享你想到的事情。";
         }
@@ -5549,14 +5549,14 @@ type: fact, preference, habit, relationship, understanding, self
       // 如果是任务触发，用任务提示但也带上情境
       if (source.startsWith("task:")) {
         if (context) {
-          const contextInfo = this.buildContextualPrompt(context, prompt);
+          const contextInfo = this.buildContextualPrompt(context, prompt, source);
           systemPrompt = `[提醒任务]\n${prompt}\n\n---\n${contextInfo}`;
         } else {
           systemPrompt = prompt;
         }
       } else {
         // 空闲触发 - 完全上下文化
-        systemPrompt = this.buildContextualPrompt(context, prompt);
+        systemPrompt = this.buildContextualPrompt(context, prompt, source);
       }
       
       // 创建助手消息
@@ -5603,13 +5603,16 @@ type: fact, preference, habit, relationship, understanding, self
         const msgIdx = state.messagesByChatId[chatId].findIndex(m => m.id === assistantMsgId);
         
         if (isSkipped) {
-          console.log("[主动消息] 模型判断当前不适合打扰，跳过本次");
-          // 删除占位消息，不保存、不通知
+          const skipReason = source.startsWith("task:") 
+            ? "任务触发但澈判断当前不打扰"
+            : "澈判断当前不打扰";
+          console.log(`[主动消息] 跳过本次：${skipReason} (source=${source})`);
           if (msgIdx !== -1) {
             state.messagesByChatId[chatId].splice(msgIdx, 1);
           }
           renderMessages();
-          setStatus("");
+          setStatus(`💭 澈想了想，这会儿先不打扰你`);
+          setTimeout(() => setStatus(""), 3000);
           return;
         }
         
