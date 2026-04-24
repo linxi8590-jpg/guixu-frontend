@@ -90,6 +90,14 @@
     els.dndEnd = document.getElementById("dndEnd");
     els.taskQueueList = document.getElementById("taskQueueList");
     els.refreshTasksBtn = document.getElementById("refreshTasksBtn");
+    // 漫游相关
+    els.wanderEnabled = document.getElementById("wanderEnabled");
+    els.wanderConfig = document.getElementById("wanderConfig");
+    els.wanderPerDaySlider = document.getElementById("wanderPerDaySlider");
+    els.wanderPerDayValue = document.getElementById("wanderPerDayValue");
+    els.wanderInterests = document.getElementById("wanderInterests");
+    els.wanderTriggerBtn = document.getElementById("wanderTriggerBtn");
+    els.wanderLogsBtn = document.getElementById("wanderLogsBtn");
   }
 
   function renderGlobalInstruction() {
@@ -300,6 +308,26 @@
     }
     if (els.dndEnd) {
       els.dndEnd.value = cfg.dndEnd || "07:00";
+    }
+    
+    // 漫游配置渲染
+    const wanderCfg = cfg.wander || {};
+    if (els.wanderEnabled) {
+      els.wanderEnabled.checked = wanderCfg.enabled || false;
+    }
+    if (els.wanderPerDaySlider) {
+      const v = wanderCfg.perDay || 3;
+      els.wanderPerDaySlider.value = v;
+      if (els.wanderPerDayValue) els.wanderPerDayValue.textContent = v;
+    }
+    if (els.wanderInterests) {
+      els.wanderInterests.value = wanderCfg.interests || "";
+      if (!wanderCfg.interests) {
+        els.wanderInterests.placeholder = "命理学、心理学、哲学、AI新闻、小红书生活分享";
+      }
+    }
+    if (els.wanderConfig) {
+      els.wanderConfig.style.display = wanderCfg.enabled ? "block" : "none";
     }
     
     // 任务队列
@@ -1369,6 +1397,68 @@
     // 刷新任务列表
     if (els.refreshTasksBtn) {
       els.refreshTasksBtn.addEventListener("click", renderTaskQueue);
+    }
+    
+    // ===== 漫游事件 =====
+    if (els.wanderEnabled) {
+      els.wanderEnabled.addEventListener("change", () => {
+        if (!state.proactiveMessage) state.proactiveMessage = {};
+        if (!state.proactiveMessage.wander) state.proactiveMessage.wander = {};
+        state.proactiveMessage.wander.enabled = els.wanderEnabled.checked;
+        if (els.wanderConfig) {
+          els.wanderConfig.style.display = els.wanderEnabled.checked ? "block" : "none";
+        }
+        saveState(state);
+      });
+    }
+    if (els.wanderPerDaySlider) {
+      els.wanderPerDaySlider.addEventListener("input", () => {
+        const v = parseInt(els.wanderPerDaySlider.value);
+        if (els.wanderPerDayValue) els.wanderPerDayValue.textContent = v;
+        if (!state.proactiveMessage) state.proactiveMessage = {};
+        if (!state.proactiveMessage.wander) state.proactiveMessage.wander = {};
+        state.proactiveMessage.wander.perDay = v;
+        saveState(state);
+      });
+    }
+    if (els.wanderInterests) {
+      els.wanderInterests.addEventListener("input", () => {
+        if (!state.proactiveMessage) state.proactiveMessage = {};
+        if (!state.proactiveMessage.wander) state.proactiveMessage.wander = {};
+        state.proactiveMessage.wander.interests = els.wanderInterests.value;
+        saveState(state);
+      });
+    }
+    if (els.wanderTriggerBtn) {
+      els.wanderTriggerBtn.addEventListener("click", () => {
+        if (window.opener && window.opener.wander) {
+          window.opener.wander();
+          alert("已触发漫游，回到主页面看进度");
+        } else if (window.wander) {
+          window.wander();
+          alert("已触发漫游");
+        } else {
+          alert("请先回到主聊天页面（index.html），漫游功能在那里生效");
+        }
+      });
+    }
+    if (els.wanderLogsBtn) {
+      els.wanderLogsBtn.addEventListener("click", () => {
+        try {
+          const logs = JSON.parse(localStorage.getItem("llmhub_wander_logs") || "[]");
+          if (logs.length === 0) {
+            alert("还没有漫游日志。\n\n启用漫游后澈自主或手动触发漫游，回来后会在这里看到记录。");
+            return;
+          }
+          const lines = logs.slice().reverse().map(log => {
+            const t = new Date(log.ts).toLocaleString("zh-CN");
+            return `[${t}] ${log.summary || "(无总结)"}`;
+          }).join("\n\n");
+          alert(`最近 ${logs.length} 次漫游日志:\n\n${lines}`);
+        } catch (e) {
+          alert("读取日志失败: " + e.message);
+        }
+      });
     }
   }
 

@@ -218,6 +218,30 @@
           </div>
           <button type="button" id="refreshTasksBtn" class="small-button" style="margin-top: 0.5rem;">刷新列表</button>
         </div>
+        
+        <div class="field" style="margin-top: 1rem;">
+          <label class="toggle-row">
+            <input type="checkbox" id="wanderEnabled">
+            <span>🌿 自主漫游</span>
+          </label>
+          <p class="field-hint">澈在自由时间自己上网看东西，看到有意思的会存成发现记忆。需要浏览器 MCP 工具。</p>
+          <div id="wanderConfig" style="display: none; margin-top: 0.5rem;">
+            <div class="slider-field">
+              <div class="slider-label-row">
+                <span>每天漫游次数</span>
+                <span class="slider-value" id="wanderPerDayValue">3</span>
+              </div>
+              <input id="wanderPerDaySlider" type="range" min="1" max="8" step="1">
+            </div>
+            <label class="field" style="margin-top: 0.5rem;">
+              <span>兴趣方向</span>
+              <textarea id="wanderInterests" rows="3" placeholder="命理学、心理学、哲学、AI新闻、小红书生活分享"></textarea>
+              <p class="field-hint">澈漫游时会优先关注这些方向，也可以脱离去看别的</p>
+            </label>
+            <button type="button" id="wanderTriggerBtn" class="small-button" style="margin-top: 0.5rem;">🌿 手动触发漫游</button>
+            <button type="button" id="wanderLogsBtn" class="small-button" style="margin-top: 0.5rem; margin-left: 0.5rem;">📜 查看漫游日志</button>
+          </div>
+        </div>
       </div>
 
       <hr class="settings-separator">
