@@ -5603,10 +5603,50 @@ type: fact, preference, habit, relationship, understanding, self
         const msgIdx = state.messagesByChatId[chatId].findIndex(m => m.id === assistantMsgId);
         
         if (isSkipped) {
-          const skipReason = source.startsWith("task:") 
-            ? "任务触发但澈判断当前不打扰"
-            : "澈判断当前不打扰";
-          console.log(`[主动消息] 跳过本次：${skipReason} (source=${source})`);
+          // 任务触发时不接受跳过：那是澈自己定的时间，必须执行
+          if (source.startsWith("task:")) {
+            console.log("[主动消息] 任务触发但模型返回[skip]，强制重试简化prompt");
+            if (msgIdx !== -1) {
+              state.messagesByChatId[chatId].splice(msgIdx, 1);
+            }
+            renderMessages();
+            
+            // 简化 prompt 重试一次
+            const simplePrompt = `你之前给自己设置了一个提醒：${prompt.replace(/\[提醒任务\]\n/, "").split("\n")[0]}\n\n现在到点了，自然地跟林曦说话。1-3 句话。不要说"提醒时间到了"，直接说你想说的。`;
+            const retryMsgId = uuid();
+            state.messagesByChatId[chatId].push({
+              id: retryMsgId,
+              role: "assistant",
+              content: "",
+              createdAt: Date.now(),
+              isProactive: true
+            });
+            renderMessages();
+            
+            let retryText = "";
+            await callLLMStream(connection, limitedMsgs, buildFullInstruction(simplePrompt), model, (c) => {
+              retryText += c;
+              updateStreamingMessage(retryMsgId, retryText);
+            });
+            
+            const retryIdx = state.messagesByChatId[chatId].findIndex(m => m.id === retryMsgId);
+            if (retryIdx !== -1 && retryText.trim() && !retryText.trim().toLowerCase().startsWith("[skip]")) {
+              state.messagesByChatId[chatId][retryIdx].content = retryText;
+              await saveMessageToServer(chatId, state.messagesByChatId[chatId][retryIdx]);
+              chat.updatedAt = Date.now();
+              saveState(state);
+              renderMessages();
+              this.sendNotification(retryText);
+            } else if (retryIdx !== -1) {
+              state.messagesByChatId[chatId].splice(retryIdx, 1);
+              renderMessages();
+            }
+            setStatus("");
+            return;
+          }
+          
+          // 空闲触发时，尊重模型判断
+          console.log(`[主动消息] 跳过本次：澈判断当前不打扰 (source=${source})`);
           if (msgIdx !== -1) {
             state.messagesByChatId[chatId].splice(msgIdx, 1);
           }
