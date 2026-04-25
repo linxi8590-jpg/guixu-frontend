@@ -270,44 +270,31 @@
         hasImage = parts.some(p => p.inlineData?.data);
 
       } else if (apiType === 'bfl') {
-        // BFL 前端直连（含轮询）
+        // BFL 走代理:浏览器端因 CORS 无法直连 api.bfl.ai,统一走 https://api.777903.xyz/bfl/generate
+        // 代理一次性完成"提交任务 + 轮询结果",前端只需等待最终响应
         const [w, h] = (size || '1024x768').split('x').map(Number);
-        const submitUrl = `https://api.bfl.ai/v1/${model}`;
-        const submitResp = await fetch(submitUrl, {
+        const resp = await fetch('https://api.777903.xyz/bfl/generate', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'X-Key': apiKey
+            'X-BFL-Key': apiKey
           },
           body: JSON.stringify({
+            model: model,
             prompt: testPrompt,
             width: w || 1024,
             height: h || 768
           })
         });
-        if (!submitResp.ok) {
-          const t = await submitResp.text();
-          throw new Error(`提交失败 ${submitResp.status}: ${t.substring(0, 100)}`);
+        if (!resp.ok) {
+          const t = await resp.text();
+          throw new Error(`提交失败 ${resp.status}: ${t.substring(0, 100)}`);
         }
-        const submitData = await submitResp.json();
-        const pollingUrl = submitData.polling_url;
-        if (!pollingUrl) throw new Error('未返回 polling_url');
-        
-        // 测试时只轮询 10 秒
-        for (let i = 0; i < 10; i++) {
-          await new Promise(r => setTimeout(r, 1000));
-          const pollResp = await fetch(pollingUrl, {
-            headers: { 'X-Key': apiKey, 'accept': 'application/json' }
-          });
-          if (!pollResp.ok) continue;
-          respData = await pollResp.json();
-          if (respData.status === 'Ready') {
-            hasImage = respData.result?.sample;
-            break;
-          }
-          if (respData.status === 'Error' || respData.status === 'Failed') {
-            throw new Error('生成失败: ' + (respData.error || respData.status));
-          }
+        respData = await resp.json();
+        if (respData.error) {
+          throw new Error('生成失败: ' + (respData.message || respData.error));
+        }
+        hasImage = respData.url || respData.sample;
         }
         if (!hasImage) throw new Error('生成超时（测试期 10 秒未完成，正常使用会等待更久）');
       }
@@ -412,46 +399,31 @@
         return data.data?.[0]?.url || data.data?.[0]?.b64_json;
 
       } else if (apiType === 'bfl') {
-        // BFL 前端直连（云服务器无法访问 api.bfl.ai，所以不能走后端代理）
-        // 流程：1) POST 提交任务 2) 轮询 polling_url 直到 Ready
+        // BFL 走代理:浏览器端因 CORS 无法直连 api.bfl.ai,统一走 https://api.777903.xyz/bfl/generate
+        // 代理一次性完成"提交任务 + 轮询结果",前端只需等待最终响应(代理内部最多等 60 秒)
         const [w, h] = size.split('x').map(Number);
-        const submitUrl = `https://api.bfl.ai/v1/${cfg.model}`;
-        const submitResp = await fetch(submitUrl, {
+        const resp = await fetch('https://api.777903.xyz/bfl/generate', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'X-Key': cfg.apiKey
+            'X-BFL-Key': cfg.apiKey
           },
           body: JSON.stringify({
+            model: cfg.model,
             prompt: prompt,
             width: w || 1024,
             height: h || 768
           })
         });
-        if (!submitResp.ok) {
-          const errText = await submitResp.text();
-          throw new Error(`BFL 提交失败 ${submitResp.status}: ${errText.substring(0, 100)}`);
+        if (!resp.ok) {
+          const errText = await resp.text();
+          throw new Error(`BFL 提交失败 ${resp.status}: ${errText.substring(0, 100)}`);
         }
-        const submitData = await submitResp.json();
-        const pollingUrl = submitData.polling_url;
-        if (!pollingUrl) throw new Error('BFL 未返回 polling_url');
-        
-        // 轮询，最多 60 次（约 60 秒）
-        for (let i = 0; i < 60; i++) {
-          await new Promise(r => setTimeout(r, 1000));
-          const pollResp = await fetch(pollingUrl, {
-            headers: { 'X-Key': cfg.apiKey, 'accept': 'application/json' }
-          });
-          if (!pollResp.ok) continue;
-          const pollData = await pollResp.json();
-          if (pollData.status === 'Ready') {
-            return pollData.result?.sample || null;
-          }
-          if (pollData.status === 'Error' || pollData.status === 'Failed') {
-            throw new Error('BFL 生成失败: ' + (pollData.error || pollData.status));
-          }
+        const data = await resp.json();
+        if (data.error) {
+          throw new Error('BFL 生成失败: ' + (data.message || data.error));
         }
-        throw new Error('BFL 生成超时');
+        return data.url || data.sample || null;
 
       } else if (apiType === 'gemini-imagen') {
         // 走代理服务器
