@@ -295,8 +295,7 @@
           throw new Error('生成失败: ' + (respData.message || respData.error));
         }
         hasImage = respData.url || respData.sample;
-        }
-        if (!hasImage) throw new Error('生成超时（测试期 10 秒未完成，正常使用会等待更久）');
+        if (!hasImage) throw new Error('代理返回成功但没拿到图片 url');
       }
 
       if (hasImage) {
