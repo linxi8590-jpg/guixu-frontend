@@ -3203,7 +3203,7 @@ ${modelDescriptions}
               content: m.content || null,
               tool_calls: m.tool_calls
             });
-          } else if (m.images && m.images.length > 0) {
+          } else if (m.role === "user" && m.images && m.images.length > 0) {
             // 带图片的消息
             const contentParts = [];
             contentParts.push({ type: "text", text: m.content || "" });
@@ -3439,7 +3439,7 @@ ${modelDescriptions}
               role: "model",
               parts: m._geminiParts || [{ functionCall: m.functionCall }]
             });
-          } else if (m.images && m.images.length > 0) {
+          } else if (m.role === "user" && m.images && m.images.length > 0) {
             // 带图片的消息
             const parts = [];
             m.images.forEach(img => {
@@ -3670,7 +3670,7 @@ ${modelDescriptions}
           }
           
           // 处理带图片的消息
-          if (m.images && m.images.length > 0) {
+          if (m.role === "user" && m.images && m.images.length > 0) {
             const contentParts = [];
             m.images.forEach(img => {
               const match = img.match(/^data:(.+);base64,(.+)$/);
@@ -4154,7 +4154,7 @@ ${modelDescriptions}
       
       // 处理消息（包含图片）
       messages.forEach((m) => {
-        if (m.images && m.images.length > 0) {
+        if (m.role === "user" && m.images && m.images.length > 0) {
           // 多模态消息
           const contentParts = [];
           contentParts.push({ type: "text", text: m.content });
@@ -4234,7 +4234,7 @@ ${modelDescriptions}
         const role = m.role === "assistant" ? "model" : "user";
         const parts = [];
         
-        if (m.images && m.images.length > 0) {
+        if (m.role === "user" && m.images && m.images.length > 0) {
           m.images.forEach(img => {
             // 提取 base64 数据
             const match = img.match(/^data:(.+);base64,(.+)$/);
@@ -4288,7 +4288,7 @@ ${modelDescriptions}
       
       // 处理消息（包含图片）
       const bodyMessages = messages.map((m) => {
-        if (m.images && m.images.length > 0) {
+        if (m.role === "user" && m.images && m.images.length > 0) {
           const contentParts = [];
           m.images.forEach(img => {
             const match = img.match(/^data:(.+);base64,(.+)$/);
