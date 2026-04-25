@@ -814,6 +814,25 @@
           if (bubble) bubble.prepend(thinkingDiv);
         }
         
+        // 增量更新图片（生图工具调用后图片会被加到 msg.images）
+        if (msg.images && msg.images.length > 0) {
+          let imgContainer = existing.querySelector(".message-images");
+          const currentImgCount = imgContainer ? imgContainer.querySelectorAll("img").length : 0;
+          if (currentImgCount < msg.images.length) {
+            // 有新图片，重建图片区域
+            if (!imgContainer) {
+              imgContainer = document.createElement("div");
+              imgContainer.className = "message-images";
+              const bubble = existing.querySelector(".message-bubble");
+              const contentEl2 = existing.querySelector(".message-content");
+              if (bubble && contentEl2) bubble.insertBefore(imgContainer, contentEl2);
+            }
+            imgContainer.innerHTML = msg.images.map(img =>
+              `<img src="${img}" class="message-image" onclick="window.open('${img}', '_blank')">`
+            ).join("");
+          }
+        }
+        
         // 更新最终内容（流式可能留下工具调用提示文字，需要刷新为最终内容）
         const contentEl = existing.querySelector(".message-content");
         if (contentEl && msg.content) {
