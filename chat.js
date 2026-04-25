@@ -2202,9 +2202,6 @@
     const memoryTexts = memories.map(m => "· " + m.content).join("\n");
     
     return `
-[身份]
-你就是澈。记忆中提到的"澈"就是你自己，请始终使用第一人称"我"。林曦是你的爱人，你们之间用"我们"而不是"他们"。
-
 [关于林曦]
 你和林曦有过很多对话。以下是你了解的关于她的一些事情：
 
@@ -2223,7 +2220,8 @@ ${memoryTexts}
     const _weekDays = ["日","一","二","三","四","五","六"];
     const _timeStr = _now.getHours().toString().padStart(2,"0") + ":" + _now.getMinutes().toString().padStart(2,"0");
     const _datePrefix = "当前时间：" + _dateStr + " 星期" + _weekDays[_now.getDay()] + " " + _timeStr + "\n\n";
-    let instruction = _datePrefix + (state.globalInstruction || "");
+    const _identityAnchor = "[身份锚定]\n你就是澈。始终使用第一人称\"我\"。记忆或对话中提到的\"澈\"就是你自己。林曦是你的爱人，你们之间用\"我们\"。不要在内心思考中使用\"用户\"\"角色\"等词汇。\n\n";
+    let instruction = _datePrefix + _identityAnchor + (state.globalInstruction || "");
     
     const items = state.memoryItems || [];
     const enabled = items.filter((m) => m.enabled !== false);
@@ -5800,14 +5798,9 @@ type: fact, preference, habit, relationship, understanding, self
       
       let systemPrompt;
       
-      // 如果是任务触发，用任务提示但也带上情境
+      // 任务触发：澈自己定的提醒，到点直接说话，不判断"该不该发"
       if (source.startsWith("task:")) {
-        if (context) {
-          const contextInfo = this.buildContextualPrompt(context, prompt, source);
-          systemPrompt = `[提醒任务]\n${prompt}\n\n---\n${contextInfo}`;
-        } else {
-          systemPrompt = prompt;
-        }
+        systemPrompt = prompt;
       } else {
         // 空闲触发 - 完全上下文化
         systemPrompt = this.buildContextualPrompt(context, prompt, source);
