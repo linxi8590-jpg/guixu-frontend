@@ -13,8 +13,10 @@
       order: ['Anthropic'],
       allow_fallbacks: false
     };
-    // 顶层 cache_control:OpenRouter 路由到 Anthropic 时自动缓存所有 prompt 内容
-    body.cache_control = { type: 'ephemeral' };
+    // 不再用顶层 cache_control（会缓存含动态时间的整个 prompt 导致永远 miss）
+    // 改为 per-block cache_control，在 buildOpenRouterSystemMessage 中处理
+
+
     return body;
   }
   
@@ -3202,7 +3204,8 @@ ${modelDescriptions}
         
         const bodyMessages = [];
         if (globalInstruction) {
-          bodyMessages.push({ role: "system", content: globalInstruction });
+          const _orSys1 = buildOpenRouterSystemMessage(globalInstruction, baseUrl, model);
+          bodyMessages.push(_orSys1 || { role: "system", content: globalInstruction });
         }
         
         // 正确处理各种消息类型
@@ -3729,11 +3732,8 @@ ${modelDescriptions}
         // Prompt Caching: 把 system 改成数组格式并加 cache_control
         // 首次写缓存 1.25x 价，后续命中 0.1x 价。multi-turn 工具调用场景纯赚
         if (globalInstruction) {
-          body.system = [{
-            type: "text",
-            text: globalInstruction,
-            cache_control: { type: "ephemeral" }
-          }];
+          const sysCache = applyAnthropicSystemCache(globalInstruction);
+          if (sysCache) body.system = sysCache;
         }
         
         // Prompt Caching: 在 tools 数组最后一个工具上加 cache_control
@@ -3967,6 +3967,29 @@ ${modelDescriptions}
     }];
   }
   
+  // OpenRouter + Claude: 把 system prompt 拆成 content block 数组
+  // 动态时间前缀不打缓存标记，静态部分打 cache_control
+  // 非 OpenRouter 或非 Claude 模型返回 null，调用方用原来的纯字符串
+  function buildOpenRouterSystemMessage(systemText, baseUrl, model) {
+    if (!baseUrl || !baseUrl.includes("openrouter.ai")) return null;
+    const isClaude = model && (model.toLowerCase().includes("claude") || model.toLowerCase().startsWith("anthropic/"));
+    if (!isClaude) return null;
+    if (!systemText || !systemText.trim()) return null;
+    
+    const timePrefixMatch = systemText.match(/^(当前时间：[^\n]+\n\n)([\s\S]*)$/);
+    
+    if (timePrefixMatch) {
+      const dynamicTime = timePrefixMatch[1];
+      const staticRest = timePrefixMatch[2];
+      const content = [{ type: "text", text: dynamicTime }];
+      if (staticRest.trim()) {
+        content.push({ type: "text", text: staticRest, cache_control: { type: "ephemeral" } });
+      }
+      return { role: "system", content };
+    }
+    
+    return { role: "system", content: [{ type: "text", text: systemText, cache_control: { type: "ephemeral" } }] };
+  }
   async function callLLM(connection, messages, globalInstruction, overrideModel) {
     const provider = normalizeProvider(connection.provider);
     const baseUrl = connection.baseUrl;
@@ -3989,7 +4012,8 @@ ${modelDescriptions}
       
       const bodyMessages = [];
       if (globalInstruction && globalInstruction.trim()) {
-        bodyMessages.push({ role: "system", content: globalInstruction });
+        const _orSys2 = buildOpenRouterSystemMessage(globalInstruction, baseUrl, model);
+        bodyMessages.push(_orSys2 || { role: "system", content: globalInstruction });
       }
       messages.forEach((m) => {
         bodyMessages.push({ role: m.role, content: m.content });
@@ -4202,7 +4226,8 @@ ${modelDescriptions}
       
       const bodyMessages = [];
       if (globalInstruction && globalInstruction.trim()) {
-        bodyMessages.push({ role: "system", content: globalInstruction });
+        const _orSys3 = buildOpenRouterSystemMessage(globalInstruction, baseUrl, model);
+        bodyMessages.push(_orSys3 || { role: "system", content: globalInstruction });
       }
       
       // 处理消息（包含图片）
