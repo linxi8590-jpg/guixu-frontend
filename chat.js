@@ -798,7 +798,8 @@
         // 更新 token 信息
         if (msg.tokenUsage) {
           const metaSpans = existing.querySelectorAll(".message-meta span");
-          const tokenText = `📊 ${msg.tokenUsage.totalTokens || 0} tokens`;
+          const cacheInfo = msg.tokenUsage.cacheReadTokens ? ` (缓存${msg.tokenUsage.cacheReadTokens})` : "";
+          const tokenText = `📊 ${msg.tokenUsage.totalTokens || 0} tokens${cacheInfo}`;
           if (metaSpans.length >= 2) {
             metaSpans[1].textContent = tokenText;
           } else if (metaSpans.length === 1) {
@@ -875,7 +876,8 @@
     
     const formatted = formatMessageContent(msg.content);
     const time = msg.createdAt ? new Date(msg.createdAt).toLocaleTimeString() : "";
-    const tokens = msg.tokenUsage ? `📊 ${msg.tokenUsage.totalTokens || 0} tokens` : "";
+    const cacheInfo2 = msg.tokenUsage?.cacheReadTokens ? ` (缓存${msg.tokenUsage.cacheReadTokens})` : "";
+    const tokens = msg.tokenUsage ? `📊 ${msg.tokenUsage.totalTokens || 0} tokens${cacheInfo2}` : "";
     
     // 图片显示
     let imagesHtml = "";
@@ -3297,6 +3299,7 @@ ${modelDescriptions}
             totalUsage.promptTokens += streamResultOai.usage.promptTokens || 0;
             totalUsage.completionTokens += streamResultOai.usage.completionTokens || 0;
             totalUsage.totalTokens += streamResultOai.usage.totalTokens || 0;
+            totalUsage.cacheReadTokens = (totalUsage.cacheReadTokens || 0) + (streamResultOai.usage.cacheReadTokens || 0);
           }
           
           // 提取思考内容（GPT-5 reasoning_content）
@@ -3382,9 +3385,13 @@ ${modelDescriptions}
           const message = choice.message;
           
           if (response.usage) {
-            totalUsage.promptTokens += response.usage.prompt_tokens || 0;
+            const ct = response.usage.prompt_tokens_details?.cached_tokens || 0;
+            const rp = response.usage.prompt_tokens || 0;
+            const ap = rp - ct;
+            totalUsage.promptTokens += ap;
             totalUsage.completionTokens += response.usage.completion_tokens || 0;
-            totalUsage.totalTokens += response.usage.total_tokens || 0;
+            totalUsage.totalTokens += ap + (response.usage.completion_tokens || 0);
+            totalUsage.cacheReadTokens = (totalUsage.cacheReadTokens || 0) + ct;
           }
           
           if (message.tool_calls && message.tool_calls.length > 0) {
@@ -4022,12 +4029,16 @@ ${modelDescriptions}
       const msgText = choice.message.content || choice.message.reasoning_content || "";
       
       const usage = data.usage || {};
+      const cachedTokens2 = usage.prompt_tokens_details?.cached_tokens || 0;
+      const rawPrompt2 = usage.prompt_tokens || 0;
+      const actualPrompt2 = rawPrompt2 - cachedTokens2;
       return {
         text: msgText.trim(),
         usage: {
-          promptTokens: usage.prompt_tokens || 0,
+          promptTokens: actualPrompt2,
           completionTokens: usage.completion_tokens || 0,
-          totalTokens: usage.total_tokens || 0,
+          totalTokens: actualPrompt2 + (usage.completion_tokens || 0),
+          cacheReadTokens: cachedTokens2,
         },
       };
     }
@@ -4449,11 +4460,18 @@ ${modelDescriptions}
           
           // Usage
           if (json.usage) {
+            const cachedTokens = json.usage.prompt_tokens_details?.cached_tokens || 0;
+            const rawPrompt = json.usage.prompt_tokens || 0;
+            const actualPrompt = rawPrompt - cachedTokens;  // 实际计费的 input
             usage = {
-              promptTokens: json.usage.prompt_tokens || 0,
+              promptTokens: actualPrompt,
               completionTokens: json.usage.completion_tokens || 0,
-              totalTokens: json.usage.total_tokens || 0,
+              totalTokens: actualPrompt + (json.usage.completion_tokens || 0),
+              cacheReadTokens: cachedTokens,
             };
+            if (cachedTokens > 0) {
+              console.log(`[Prompt Cache] OpenRouter 命中 ${cachedTokens} tokens`);
+            }
           }
         } catch (e) {}
       }
