@@ -944,12 +944,12 @@
     
     const editBtn = div.querySelector(".edit-btn");
     if (editBtn) {
-      editBtn.addEventListener("click", () => startEditMessage(chat.id, msg.id, idx));
+      editBtn.addEventListener("click", () => startEditMessage(chat.id, msg.id));
     }
     
     const regenBtn = div.querySelector(".regen-btn");
     if (regenBtn) {
-      regenBtn.addEventListener("click", () => regenerateMessage(chat.id, idx));
+      regenBtn.addEventListener("click", () => regenerateMessage(chat.id, msg.id));
     }
     
     const ttsBtn = div.querySelector(".tts-btn");
@@ -1105,8 +1105,15 @@
   }
   
   // 重新生成回复
-  async function regenerateMessage(chatId, msgIdx) {
+  async function regenerateMessage(chatId, msgIdOrIdx) {
     const messages = state.messagesByChatId[chatId] || [];
+    // 兼容 msgId（字符串）和旧的 msgIdx（数字）两种调用方式
+    let msgIdx;
+    if (typeof msgIdOrIdx === "string") {
+      msgIdx = messages.findIndex(m => m.id === msgIdOrIdx);
+    } else {
+      msgIdx = msgIdOrIdx;
+    }
     if (msgIdx < 1) return;
     
     // 删除当前消息及之后的所有消息（同步到服务器）
@@ -1237,7 +1244,7 @@
   // ========== 消息编辑 ==========
   let editingMessageId = null;
 
-  function startEditMessage(chatId, msgId, msgIdx) {
+  function startEditMessage(chatId, msgId) {
     editingMessageId = msgId;
     const messages = state.messagesByChatId[chatId] || [];
     const msg = messages.find((m) => m.id === msgId);
@@ -1269,15 +1276,16 @@
     bubble.querySelector(".save-edit").addEventListener("click", () => {
       const newContent = textarea.value.trim();
       if (newContent) {
-        finishEditMessage(chatId, msgId, msgIdx, newContent);
+        finishEditMessage(chatId, msgId, newContent);
       }
     });
   }
 
-  async function finishEditMessage(chatId, msgId, msgIdx, newContent) {
+  async function finishEditMessage(chatId, msgId, newContent) {
     const messages = state.messagesByChatId[chatId] || [];
-    const msg = messages.find((m) => m.id === msgId);
-    if (!msg) return;
+    const msgIdx = messages.findIndex(m => m.id === msgId);
+    if (msgIdx === -1) return;
+    const msg = messages[msgIdx];
     
     msg.content = newContent;
     state.messagesByChatId[chatId] = messages.slice(0, msgIdx + 1);
@@ -1853,6 +1861,14 @@
         role: m.role,
         content: m.content,
         images: m.images || [],
+        // 工具调用字段（跨轮次上下文保持）
+        ...(m.tool_calls && { tool_calls: m.tool_calls }),
+        ...(m.tool_call_id && { tool_call_id: m.tool_call_id }),
+        ...(m.tool_use_id && { tool_use_id: m.tool_use_id }),
+        ...(m.functionCall && { functionCall: m.functionCall }),
+        ...(m.functionResponse && { functionResponse: m.functionResponse }),
+        ...(m._geminiParts && { _geminiParts: m._geminiParts }),
+        ...(m._toolInternal && { _toolInternal: true }),
       }));
       
       const limitedMsgs = applyContextLimit(historyMsgs);
@@ -1935,6 +1951,23 @@
         if (extracted.thinking) {
           result.thinking = extracted.thinking;
           result.text = extracted.cleanText;
+        }
+      }
+      
+      // 把工具调用中间消息写回 messagesByChatId（跨轮次上下文保持的关键）
+      if (result.toolMessages && result.toolMessages.length > 0) {
+        const assistantIdx = state.messagesByChatId[chat.id].findIndex(m => m.id === assistantMsgId);
+        if (assistantIdx !== -1) {
+          const toolMsgs = result.toolMessages.map(m => ({
+            ...m,
+            id: uuid(),
+            _toolInternal: true,  // 标记为内部消息，renderMessages 跳过显示
+            hidden: true,         // renderMessages 已有 !m.hidden 过滤
+            createdAt: Date.now(),
+          }));
+          // 插入到最终 assistant 消息之前
+          state.messagesByChatId[chat.id].splice(assistantIdx, 0, ...toolMsgs);
+          console.log(`[工具上下文] 写回 ${toolMsgs.length} 条中间消息到历史`);
         }
       }
       
@@ -2025,7 +2058,7 @@
     // 过滤掉错误消息，避免污染上下文
     messages = messages.filter(m => {
       if (m.isError) return false;
-      const content = m.content || "";
+      const content = typeof m.content === "string" ? m.content : "";
       if (content.startsWith("[请求出错]")) return false;
       if (content.startsWith("[⚠️ 模型返回空响应")) return false;
       if (content.startsWith("[模型返回空响应")) return false;
@@ -2042,8 +2075,11 @@
       const curr = messages[i];
       const prev = fixed[fixed.length - 1];
       
-      if (prev && prev.role === curr.role) {
-        // 连续相同角色，合并内容
+      // 工具调用消息不参与合并（tool_calls/tool_result 有严格顺序要求）
+      const currIsTool = curr._toolInternal || curr.tool_calls || curr.tool_call_id || curr.tool_use_id || curr.functionCall || curr.functionResponse || (curr.role === "tool");
+      const prevIsTool = prev && (prev._toolInternal || prev.tool_calls || prev.tool_call_id || prev.tool_use_id || prev.functionCall || prev.functionResponse || (prev.role === "tool"));
+      if (prev && prev.role === curr.role && !currIsTool && !prevIsTool) {
+        // 连续相同角色，合并内容（工具消息除外）
         console.log(`[上下文修复] 合并连续 ${curr.role} 消息`);
         prev.content = (prev.content || "") + "\n\n" + (curr.content || "");
         if (curr.images && curr.images.length > 0) {
@@ -3904,10 +3940,14 @@ ${modelDescriptions}
     updateStreamingMessage(assistantMsgId, finalText);
     setStatus("");
     
+    // 提取工具调用中间消息（conversationMessages 中新增的部分）
+    const toolMessages = conversationMessages.slice(messages.length);
+    
     return {
       text: finalText,
       thinking: finalThinking,
-      usage: totalUsage
+      usage: totalUsage,
+      toolMessages: toolMessages.length > 0 ? toolMessages : null
     };
   }
 
