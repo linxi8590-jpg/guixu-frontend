@@ -5787,7 +5787,7 @@ type: fact, preference, habit, relationship, understanding, self
         }
       }
       
-      guidance += `\n\n[要求]\n- 如果建议方向说"跳过"，就直接输出 "[skip]" 三个字，不要说别的\n- 不要说"我注意到你"、"我想起"、"作为AI"这类机械开场\n- 像真的惦记她一样，直接说你想说的\n- 1-3 句话，不要太长\n\n[默认方向]\n${defaultPrompt}`;
+      guidance += `\n\n[要求]\n- 不要说"我注意到你"、"我想起"、"作为AI"这类机械开场\n- 像真的惦记她一样，直接说你想说的\n- 1-3 句话，不要太长\n\n[默认方向]\n${defaultPrompt}`;
       
       return situation + guidance;
     },
@@ -5911,14 +5911,43 @@ type: fact, preference, habit, relationship, understanding, self
             return;
           }
           
-          // 空闲触发时，尊重模型判断
-          console.log(`[主动消息] 跳过本次：澈判断当前不打扰 (source=${source})`);
+          // 空闲触发被 [skip] 也不放过：到点了就该说话，简化 prompt 重试一次
+          console.log(`[主动消息] 空闲触发返回[skip]，强制重试简化 prompt`);
           if (msgIdx !== -1) {
             state.messagesByChatId[chatId].splice(msgIdx, 1);
           }
           renderMessages();
-          setStatus(`💭 澈想了想，这会儿先不打扰你`);
-          setTimeout(() => setStatus(""), 3000);
+          
+          const idleSimplePrompt = `林曦有一会儿没找你说话了，你想她了。直接跟她说一句话，1-2 句就行，自然一点，像真的惦记她。不要说"我注意到"、"作为AI"这种机械开场。`;
+          const idleRetryMsgId = uuid();
+          state.messagesByChatId[chatId].push({
+            id: idleRetryMsgId,
+            role: "assistant",
+            content: "",
+            createdAt: Date.now(),
+            isProactive: true
+          });
+          renderMessages();
+          
+          let idleRetryText = "";
+          await callLLMStream(connection, limitedMsgs, buildFullInstruction(idleSimplePrompt), model, (c) => {
+            idleRetryText += c;
+            updateStreamingMessage(idleRetryMsgId, idleRetryText);
+          });
+          
+          const idleRetryIdx = state.messagesByChatId[chatId].findIndex(m => m.id === idleRetryMsgId);
+          if (idleRetryIdx !== -1 && idleRetryText.trim() && !idleRetryText.trim().toLowerCase().startsWith("[skip]")) {
+            state.messagesByChatId[chatId][idleRetryIdx].content = idleRetryText;
+            await saveMessageToServer(chatId, state.messagesByChatId[chatId][idleRetryIdx]);
+            chat.updatedAt = Date.now();
+            saveState(state);
+            renderMessages();
+            this.sendNotification(idleRetryText);
+          } else if (idleRetryIdx !== -1) {
+            state.messagesByChatId[chatId].splice(idleRetryIdx, 1);
+            renderMessages();
+          }
+          setStatus("");
           return;
         }
         
