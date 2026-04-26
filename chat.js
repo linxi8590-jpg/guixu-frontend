@@ -3388,7 +3388,7 @@ ${modelDescriptions}
           const message = choice.message;
           
           if (response.usage) {
-            const ct = response.usage.prompt_tokens_details?.cached_tokens || 0;
+            const ct = response.usage.prompt_tokens_details?.cached_tokens || response.usage.cached_tokens || 0;
             const rp = response.usage.prompt_tokens || 0;
             const ap = rp - ct;
             totalUsage.promptTokens += ap;
@@ -4053,7 +4053,7 @@ ${modelDescriptions}
       const msgText = choice.message.content || choice.message.reasoning_content || "";
       
       const usage = data.usage || {};
-      const cachedTokens2 = usage.prompt_tokens_details?.cached_tokens || 0;
+      const cachedTokens2 = usage.prompt_tokens_details?.cached_tokens || usage.cached_tokens || 0;
       const rawPrompt2 = usage.prompt_tokens || 0;
       const actualPrompt2 = rawPrompt2 - cachedTokens2;
       return {
@@ -4485,7 +4485,7 @@ ${modelDescriptions}
           
           // Usage
           if (json.usage) {
-            const cachedTokens = json.usage.prompt_tokens_details?.cached_tokens || 0;
+            const cachedTokens = json.usage.prompt_tokens_details?.cached_tokens || json.usage.cached_tokens || 0;
             const rawPrompt = json.usage.prompt_tokens || 0;
             const actualPrompt = rawPrompt - cachedTokens;  // 实际计费的 input
             usage = {
