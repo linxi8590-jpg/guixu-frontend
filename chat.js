@@ -3741,7 +3741,7 @@ ${modelDescriptions}
         if (formattedTools.length > 0) {
           const toolsWithCache = formattedTools.map((t, idx) => {
             if (idx === formattedTools.length - 1) {
-              return { ...t, cache_control: { type: "ephemeral" } };
+              return { ...t, cache_control: { type: "ephemeral", ttl: "1h" } };
             }
             return t;
           });
@@ -3925,12 +3925,12 @@ ${modelDescriptions}
       targetMsg.content = [{
         type: "text",
         text: targetMsg.content,
-        cache_control: { type: "ephemeral" }
+        cache_control: { type: "ephemeral", ttl: "1h" }
       }];
     } else if (Array.isArray(targetMsg.content) && targetMsg.content.length > 0) {
       const lastBlock = targetMsg.content[targetMsg.content.length - 1];
       if (lastBlock && !lastBlock.cache_control) {
-        lastBlock.cache_control = { type: "ephemeral" };
+        lastBlock.cache_control = { type: "ephemeral", ttl: "1h" };
       }
     }
     return bodyMessages;
@@ -3953,7 +3953,7 @@ ${modelDescriptions}
         blocks.push({
           type: "text",
           text: staticRest,
-          cache_control: { type: "ephemeral" }
+          cache_control: { type: "ephemeral", ttl: "1h" }
         });
       }
       return blocks;
@@ -3963,7 +3963,7 @@ ${modelDescriptions}
     return [{
       type: "text",
       text: systemText,
-      cache_control: { type: "ephemeral" }
+      cache_control: { type: "ephemeral", ttl: "1h" }
     }];
   }
   
@@ -3983,12 +3983,12 @@ ${modelDescriptions}
       const staticRest = timePrefixMatch[2];
       const content = [{ type: "text", text: dynamicTime }];
       if (staticRest.trim()) {
-        content.push({ type: "text", text: staticRest, cache_control: { type: "ephemeral" } });
+        content.push({ type: "text", text: staticRest, cache_control: { type: "ephemeral", ttl: "1h" } });
       }
       return { role: "system", content };
     }
     
-    return { role: "system", content: [{ type: "text", text: systemText, cache_control: { type: "ephemeral" } }] };
+    return { role: "system", content: [{ type: "text", text: systemText, cache_control: { type: "ephemeral", ttl: "1h" } }] };
   }
   async function callLLM(connection, messages, globalInstruction, overrideModel) {
     const provider = normalizeProvider(connection.provider);
