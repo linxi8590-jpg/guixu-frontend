@@ -4,35 +4,6 @@
   // GPT-5 系列用 max_completion_tokens 代替 max_tokens
   // OpenRouter 路由控制:Claude 模型强制走 Anthropic 官方,保证 prompt caching 命中
   // 不传/非 openrouter 的 baseUrl 不动它
-  // OpenRouter + Claude 模型时,给 system 消息加 cache_control 标记
-  // OpenRouter 支持在 OpenAI 兼容格式中使用 content 数组 + cache_control
-  function buildSystemMessageForOpenAI(globalInstruction, baseUrl, model) {
-    if (!baseUrl || !baseUrl.includes('openrouter.ai')) {
-      return { role: "system", content: globalInstruction };
-    }
-    const isClaude = model && (model.toLowerCase().includes('claude') || model.toLowerCase().startsWith('anthropic/'));
-    if (!isClaude) {
-      return { role: "system", content: globalInstruction };
-    }
-    // OpenRouter + Claude:用数组格式 + cache_control,让缓存生效
-    const timePrefixMatch = globalInstruction.match(/^(当前时间：[^\n]+\n\n)([\s\S]*)$/);
-    if (timePrefixMatch) {
-      return {
-        role: "system",
-        content: [
-          { type: "text", text: timePrefixMatch[1] },
-          { type: "text", text: timePrefixMatch[2], cache_control: { type: "ephemeral" } }
-        ]
-      };
-    }
-    return {
-      role: "system",
-      content: [
-        { type: "text", text: globalInstruction, cache_control: { type: "ephemeral" } }
-      ]
-    };
-  }
-
   function applyOpenRouterProvider(body, baseUrl, model) {
     if (!baseUrl || !model) return body;
     if (!baseUrl.includes('openrouter.ai')) return body;
@@ -42,6 +13,8 @@
       order: ['Anthropic'],
       allow_fallbacks: false
     };
+    // 顶层 cache_control:OpenRouter 路由到 Anthropic 时自动缓存所有 prompt 内容
+    body.cache_control = { type: 'ephemeral' };
     return body;
   }
   
@@ -3227,7 +3200,7 @@ ${modelDescriptions}
         
         const bodyMessages = [];
         if (globalInstruction) {
-          bodyMessages.push(buildSystemMessageForOpenAI(globalInstruction, baseUrl, model));
+          bodyMessages.push({ role: "system", content: globalInstruction });
         }
         
         // 正确处理各种消息类型
@@ -4009,7 +3982,7 @@ ${modelDescriptions}
       
       const bodyMessages = [];
       if (globalInstruction && globalInstruction.trim()) {
-        bodyMessages.push(buildSystemMessageForOpenAI(globalInstruction, baseUrl, model));
+        bodyMessages.push({ role: "system", content: globalInstruction });
       }
       messages.forEach((m) => {
         bodyMessages.push({ role: m.role, content: m.content });
@@ -4218,7 +4191,7 @@ ${modelDescriptions}
       
       const bodyMessages = [];
       if (globalInstruction && globalInstruction.trim()) {
-        bodyMessages.push(buildSystemMessageForOpenAI(globalInstruction, baseUrl, model));
+        bodyMessages.push({ role: "system", content: globalInstruction });
       }
       
       // 处理消息（包含图片）
