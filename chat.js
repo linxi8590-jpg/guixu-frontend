@@ -3913,8 +3913,29 @@ ${modelDescriptions}
   }
   
   // 给 Anthropic system prompt 打缓存标记
+  // 注意:开头的"当前时间:"那段每次都变,如果跟静态内容一起打缓存会导致每次 cache miss
+  // 拆成两个 block:动态时间不缓存,后面静态部分打缓存
   function applyAnthropicSystemCache(systemText) {
     if (!systemText || !systemText.trim()) return null;
+    
+    // 检测开头是否有"当前时间:..."的动态前缀(由 buildFullInstruction 注入)
+    const timePrefixMatch = systemText.match(/^(当前时间：[^\n]+\n\n)([\s\S]*)$/);
+    
+    if (timePrefixMatch) {
+      const dynamicTime = timePrefixMatch[1];   // 时间这段每次都变,不缓存
+      const staticRest = timePrefixMatch[2];    // 后面这段稳定,打缓存
+      const blocks = [{ type: "text", text: dynamicTime }];
+      if (staticRest.trim()) {
+        blocks.push({
+          type: "text",
+          text: staticRest,
+          cache_control: { type: "ephemeral" }
+        });
+      }
+      return blocks;
+    }
+    
+    // 没有时间前缀就按原逻辑整段缓存
     return [{
       type: "text",
       text: systemText,
