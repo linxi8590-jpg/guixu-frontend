@@ -2,6 +2,20 @@
   "use strict";
 
   // GPT-5 系列用 max_completion_tokens 代替 max_tokens
+  // OpenRouter 路由控制:Claude 模型强制走 Anthropic 官方,保证 prompt caching 命中
+  // 不传/非 openrouter 的 baseUrl 不动它
+  function applyOpenRouterProvider(body, baseUrl, model) {
+    if (!baseUrl || !model) return body;
+    if (!baseUrl.includes('openrouter.ai')) return body;
+    const isClaude = model.toLowerCase().includes('claude') || model.toLowerCase().startsWith('anthropic/');
+    if (!isClaude) return body;
+    body.provider = {
+      order: ['Anthropic'],
+      allow_fallbacks: false
+    };
+    return body;
+  }
+  
   function fixMaxTokens(body, model) {
     if (model && (model.startsWith("gpt-5") || model.startsWith("o3-") || model.startsWith("o4"))) {
       body.max_completion_tokens = body.max_tokens;
@@ -3229,6 +3243,7 @@ ${modelDescriptions}
           presence_penalty: presencePenalty,
         };
         fixMaxTokens(body, model);
+        applyOpenRouterProvider(body, baseUrl, model);
         
         // OpenAI Reasoning 支持（GPT-5 系列）
         const thinkingConfigOai = getThinkingConfig();
@@ -3977,14 +3992,18 @@ ${modelDescriptions}
           "Content-Type": "application/json",
           Authorization: "Bearer " + apiKey,
         },
-        body: JSON.stringify(fixMaxTokens({
-          model,
-          messages: bodyMessages,
-          temperature,
-          max_tokens: maxTokens,
-          frequency_penalty: frequencyPenalty,
-          presence_penalty: presencePenalty,
-        }, model)),
+        body: (() => {
+          const _body = fixMaxTokens({
+            model,
+            messages: bodyMessages,
+            temperature,
+            max_tokens: maxTokens,
+            frequency_penalty: frequencyPenalty,
+            presence_penalty: presencePenalty,
+          }, model);
+          applyOpenRouterProvider(_body, baseUrl, model);
+          return JSON.stringify(_body);
+        })(),
       });
       
       if (!resp.ok) {
@@ -4202,6 +4221,7 @@ ${modelDescriptions}
         stream: true,
       };
       fixMaxTokens(streamBody, model);
+      applyOpenRouterProvider(streamBody, baseUrl, model);
       
       // OpenAI Reasoning 支持（流式）
       const thinkingConfigStream = getThinkingConfig();
