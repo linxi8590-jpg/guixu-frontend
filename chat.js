@@ -3851,7 +3851,7 @@ ${modelDescriptions}
         
         // 推送请求快照到后端（cache_warmup + keepalive 用）
         if (!chatId || chatId === (getActiveChat(state) || {}).id) {
-          pushDreamSnapshot(body, conn);
+          pushDreamSnapshot(body, connection);
         }
         
         // 流式请求（解决超时 + 实时显示）
