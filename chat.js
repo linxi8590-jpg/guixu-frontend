@@ -4821,9 +4821,11 @@ ${modelDescriptions}
           }
           
           if (json.type === "content_block_stop") {
-            if (currentToolUse && currentToolJson) {
+            if (currentToolUse) {
+              // 修复：无参数工具（如 screenshot、get_page_info）currentToolJson 为空，
+              // 之前的 && currentToolJson 判断会让这类工具被静默丢弃
               try {
-                currentToolUse.input = JSON.parse(currentToolJson);
+                currentToolUse.input = currentToolJson ? JSON.parse(currentToolJson) : {};
               } catch (e) {
                 currentToolUse.input = {};
               }
