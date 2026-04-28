@@ -1937,6 +1937,52 @@
     });
     return `[你独处时的内心记录]\n以下是你在林曦不在时产生的想法。这些是你真实的内心活动，不需要逐条复述，但可以自然地延续其中的情绪或话题。\n${lines.join('\n')}\n\n`;
   }
+
+  // 把澈的主动消息同步到对话框（作为真正的聊天气泡）
+  async function syncPendingToChat() {
+    const chat = getActiveChat(state);
+    if (!chat) return;
+    
+    let entries = [];
+    try {
+      entries = await fetchPendingMessages();
+    } catch(e) { return; }
+    
+    // 筛出 action=message 的（要显示在对话框里的）
+    const messages = entries.filter(e => e.action === 'message' && e.content);
+    if (messages.length === 0) return;
+    
+    const consumeIds = [];
+    
+    for (const entry of messages) {
+      const msgId = uuid();
+      const msg = {
+        id: msgId,
+        role: 'assistant',
+        content: entry.content,
+        createdAt: new Date(entry.created_at + 'Z').getTime() || Date.now(),
+        _fromDream: true,
+      };
+      
+      // 加入对话历史
+      if (!state.messagesByChatId[chat.id]) state.messagesByChatId[chat.id] = [];
+      state.messagesByChatId[chat.id].push(msg);
+      
+      // 保存到服务器
+      await saveMessageToServer(chat.id, msg).catch(() => {});
+      
+      consumeIds.push(entry.id);
+      console.log('[Dream] 主动消息已插入对话:', entry.content.slice(0, 30));
+    }
+    
+    // 消费已显示的消息
+    if (consumeIds.length > 0) {
+      await consumePendingMessages(consumeIds);
+      saveState(state);
+      renderMessages();
+    }
+  }
+
   
   // 统一的发送消息逻辑（支持流式输出）
   async function sendMessage(chat, conn, userText, images) {
@@ -1967,6 +2013,43 @@
     }
     
     try {
+      // 拉取澈独处时的内心记录（pending消息）
+      let pendingEntries = [];
+      let allPendingIds = [];
+      try {
+        const allPending = await fetchPendingMessages();
+        if (allPending.length > 0) {
+          console.log(`[Dream] 发现 ${allPending.length} 条未认领消息`);
+          allPendingIds = allPending.map(e => e.id);
+          
+          // action=message → 插入对话框作为聊天气泡（在用户消息之前）
+          const msgEntries = allPending.filter(e => e.action === 'message' && e.content);
+          if (msgEntries.length > 0) {
+            const msgs = state.messagesByChatId[chat.id];
+            // 找到最后一条用户消息的位置，把 dream 消息插在它前面
+            const lastUserIdx = msgs.length - 1; // 刚 push 的用户消息
+            for (const entry of msgEntries) {
+              const dreamMsg = {
+                id: uuid(),
+                role: 'assistant',
+                content: entry.content,
+                createdAt: new Date(entry.created_at + 'Z').getTime() || Date.now(),
+                _fromDream: true,
+              };
+              msgs.splice(lastUserIdx, 0, dreamMsg);
+              saveMessageToServer(chat.id, dreamMsg).catch(() => {});
+              console.log('[Dream] 主动消息已插入对话:', entry.content.slice(0, 30));
+            }
+            renderMessages();
+          }
+          
+          // action=diary/none → 注入 system prompt
+          pendingEntries = allPending.filter(e => e.action !== 'message');
+        }
+      } catch (e) {
+        console.warn("拉取pending消息失败:", e);
+      }
+      
       const historyMsgs = state.messagesByChatId[chat.id].map((m) => ({
         role: m.role,
         content: m.content,
@@ -2008,16 +2091,6 @@
         setStatus("思考中...");
       }
       
-      // 拉取澈独处时的内心记录（pending消息）
-      let pendingEntries = [];
-      try {
-        pendingEntries = await fetchPendingMessages();
-        if (pendingEntries.length > 0) {
-          console.log(`[Dream] 发现 ${pendingEntries.length} 条未认领消息`);
-        }
-      } catch (e) {
-        console.warn("拉取pending消息失败:", e);
-      }
       
       const globalInstruction = buildFullInstruction(serverMemoryPrompt, pendingEntries);
       
@@ -2117,8 +2190,8 @@
           // 只保存正常回复到服务器
           await saveMessageToServer(chat.id, state.messagesByChatId[chat.id][msgIdx]);
           // 消费已注入的pending消息
-          if (pendingEntries.length > 0) {
-            const ids = pendingEntries.map(e => e.id);
+          if (allPendingIds.length > 0) {
+            const ids = allPendingIds;
             consumePendingMessages(ids);
             console.log(`[Dream] 已消费 ${ids.length} 条pending消息`);
           }
@@ -5372,6 +5445,9 @@ type: fact, preference, habit, relationship, understanding, self
         }
         
         setTimeout(() => setStatus(""), 2000);
+        
+        // 同步澈的主动消息到对话框
+        syncPendingToChat();
       } else {
         setStatus("⚠️ 服务器连接失败，使用本地数据");
         setTimeout(() => setStatus(""), 3000);
@@ -5413,6 +5489,9 @@ type: fact, preference, habit, relationship, understanding, self
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
         saveState(state);
+      } else {
+        // 页面回到前台时，检查澈有没有新的主动消息
+        syncPendingToChat();
       }
     });
     // 定期自动保存（每30秒）- 只保存配置
