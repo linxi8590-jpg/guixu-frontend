@@ -234,7 +234,7 @@
     // 从 localStorage 读取服务器配置
     function loadConfig() {
       try {
-        const raw = localStorage.getItem('llmhub_state');
+        const raw = localStorage.getItem('llm_hub_state_v1');
         if (!raw) return false;
         const st = JSON.parse(raw);
         const sm = st.serverMemory || {};
