@@ -1,4 +1,4 @@
-// 归墟 Service Worker — Web Push 推送
+// 归墟 Service Worker — Web Push 推送 + 旧缓存清理
 
 self.addEventListener('push', function(event) {
   if (!event.data) return;
@@ -32,13 +32,11 @@ self.addEventListener('notificationclick', function(event) {
   
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clientList) {
-      // 如果已经打开了归墟，聚焦
       for (const client of clientList) {
         if (client.url.includes(self.registration.scope) && 'focus' in client) {
           return client.focus();
         }
       }
-      // 否则打开新窗口
       return clients.openWindow(url);
     })
   );
@@ -49,5 +47,18 @@ self.addEventListener('install', function() {
 });
 
 self.addEventListener('activate', function(event) {
-  event.waitUntil(self.clients.claim());
+  // 清理旧版本的离线缓存
+  event.waitUntil(
+    caches.keys().then(function(keys) {
+      return Promise.all(
+        keys.filter(function(k) { return k.startsWith('llm-hub-'); })
+            .map(function(k) { 
+              console.log('[SW] 清理旧缓存:', k);
+              return caches.delete(k); 
+            })
+      );
+    }).then(function() {
+      return self.clients.claim();
+    })
+  );
 });

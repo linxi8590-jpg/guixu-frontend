@@ -5423,8 +5423,8 @@ type: fact, preference, habit, relationship, understanding, self
     setTimeout(async () => {
       if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
       try {
-        const swReg = await navigator.serviceWorker.register('/sw.js');
-        console.log('[Push] Service Worker 已注册');
+        const swReg = await navigator.serviceWorker.ready;
+        console.log('[Push] Service Worker ready');
         
         // 已有权限才继续，不主动弹窗（避免干扰 UI）
         if (Notification.permission === 'granted') {
