@@ -1851,10 +1851,36 @@
     await sendMessage(chat, conn, content, images);
   }
   
+  // 同步当前连接信息到后端（供keepalive使用同一模型/连接）
+  function syncDreamConnection(chat, conn) {
+    const sm = state.serverMemory || {};
+    if (!sm.serverUrl || !sm.token) return;
+    
+    const model = chat.model || conn.defaultModel || '';
+    const syncData = {
+      model: model,
+      apiKey: conn.apiKey || '',
+      apiBaseUrl: (conn.baseUrl || '').replace(/\/+$/, ''),
+      apiFormat: conn.provider || 'openai',
+      lastChatAt: Date.now(),
+    };
+    
+    // 静默同步，不阻塞聊天
+    const url = sm.serverUrl.replace(/\/$/, '') + '/api/dream/config?token=' + encodeURIComponent(sm.token);
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(syncData),
+    }).catch(() => {});
+  }
+  
   // 统一的发送消息逻辑（支持流式输出）
   async function sendMessage(chat, conn, userText, images) {
     // 重置主动消息的空闲计时器
     if (window.LLMHubProactive) window.LLMHubProactive.resetActivity();
+    
+    // 同步当前连接信息到后端（keepalive用）
+    syncDreamConnection(chat, conn);
     
     try {
       const historyMsgs = state.messagesByChatId[chat.id].map((m) => ({
