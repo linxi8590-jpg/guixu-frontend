@@ -1,85 +1,53 @@
-/* 归墟 Service Worker
-   iPhone/PWA 更新关键点：
-   - 注册 sw.js 时带版本号：sw.js?v=xxx
-   - SW 里用该版本号做 cache 名称，避免旧缓存“死锁”
-*/
-const VERSION = new URL(self.location.href).searchParams.get("v") || "v1";
-const CACHE_NAME = "llm-hub-" + VERSION;
+// 归墟 Service Worker — Web Push 推送
 
-const ASSETS = [
-  "./",
-  "./index.html",
-  "./connections.html",
-  "./memory.html",
-  "./data.html",
-  "./styles.css",
-  "./state.js",
-  "./config.js",
-  "./api.js",
-  "./chat.js",
-  "./connections.js",
-  "./memory.js",
-  "./data.js",
-  "./mcp.js",
-  "./tts.js",
-  "./imagegen.js",
-  "./version.js",
-  "./sw-register.js"
-];
-
-self.addEventListener("install", (event) => {
-  self.skipWaiting();
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)).catch(() => {})
-  );
-});
-
-self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) => {
-      return Promise.all(
-        keys
-          .filter((k) => k.startsWith("llm-hub-") && k !== CACHE_NAME)
-          .map((k) => caches.delete(k))
-      );
-    }).then(() => self.clients.claim()).catch(() => self.clients.claim())
-  );
-});
-
-self.addEventListener("fetch", (event) => {
-  const req = event.request;
-  if (req.method !== "GET") return;
-
-  const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return;
-
-  // 页面导航：网络优先，失败再用缓存
-  if (req.mode === "navigate") {
-    event.respondWith(
-      fetch(req)
-        .then((resp) => {
-          const copy = resp.clone();
-          caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {});
-          return resp;
-        })
-        .catch(() =>
-          caches.match(req).then((r) => r || caches.match("./index.html"))
-        )
+self.addEventListener('push', function(event) {
+  if (!event.data) return;
+  
+  try {
+    const data = event.data.json();
+    const options = {
+      body: data.body || '',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: 'guixu-dream-' + Date.now(),
+      renotify: true,
+      data: {
+        url: self.registration.scope,
+        ...data.data,
+      },
+    };
+    
+    event.waitUntil(
+      self.registration.showNotification(data.title || '澈', options)
     );
-    return;
+  } catch (e) {
+    console.error('[SW] push parse error:', e);
   }
+});
 
-  // 静态资源：缓存优先 + 后台更新
-  event.respondWith(
-    caches.match(req).then((cached) => {
-      const fetchPromise = fetch(req)
-        .then((resp) => {
-          const copy = resp.clone();
-          caches.open(CACHE_NAME).then((c) => c.put(req, copy)).catch(() => {});
-          return resp;
-        })
-        .catch(() => cached);
-      return cached || fetchPromise;
+// 点击通知打开归墟
+self.addEventListener('notificationclick', function(event) {
+  event.notification.close();
+  const url = event.notification.data?.url || '/';
+  
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clientList) {
+      // 如果已经打开了归墟，聚焦
+      for (const client of clientList) {
+        if (client.url.includes(self.registration.scope) && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      // 否则打开新窗口
+      return clients.openWindow(url);
     })
   );
+});
+
+self.addEventListener('install', function() {
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', function(event) {
+  event.waitUntil(self.clients.claim());
 });

@@ -5397,11 +5397,52 @@ type: fact, preference, habit, relationship, understanding, self
     setInterval(() => {
       saveState(state);
     }, 30000);
-    
-    
-    // 请求通知权限
-    if ("Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission();
+    // Web Push 推送注册
+    if ('serviceWorker' in navigator && 'PushManager' in window) {
+      try {
+        const swReg = await navigator.serviceWorker.register('/sw.js');
+        console.log('[Push] Service Worker 已注册');
+        
+        // 请求通知权限
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') {
+          console.log('[Push] 通知权限未授予:', permission);
+        } else {
+          // 获取或创建推送订阅
+          let subscription = await swReg.pushManager.getSubscription();
+          if (!subscription) {
+            const sm = state.serverMemory || {};
+            if (sm.serverUrl && sm.token) {
+              try {
+                const vapidResp = await fetch(sm.serverUrl.replace(/\/$/, '') + '/api/dream/vapid-public-key');
+                const { publicKey } = await vapidResp.json();
+                subscription = await swReg.pushManager.subscribe({
+                  userVisibleOnly: true,
+                  applicationServerKey: publicKey,
+                });
+                console.log('[Push] 新订阅已创建');
+              } catch (e) {
+                console.warn('[Push] 订阅创建失败:', e);
+              }
+            }
+          }
+          
+          // 把订阅信息发到后端
+          if (subscription) {
+            const sm = state.serverMemory || {};
+            if (sm.serverUrl && sm.token) {
+              fetch(sm.serverUrl.replace(/\/$/, '') + '/api/dream/push-subscribe?token=' + encodeURIComponent(sm.token), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(subscription),
+              }).then(() => console.log('[Push] 订阅已同步到后端'))
+                .catch(e => console.warn('[Push] 同步失败:', e));
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[Push] 注册失败:', e);
+      }
     }
   }
 
