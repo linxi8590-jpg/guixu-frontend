@@ -800,8 +800,8 @@
         // 更新 token 信息
         if (msg.tokenUsage) {
           const metaSpans = existing.querySelectorAll(".message-meta span");
-          const cacheInfo = msg.tokenUsage.cacheReadTokens ? ` (缓存${msg.tokenUsage.cacheReadTokens})` : "";
-          const tokenText = `📊 ${msg.tokenUsage.totalTokens || 0} tokens${cacheInfo}`;
+          const u = msg.tokenUsage;
+          const tokenText = formatTokenDisplay(u);
           if (metaSpans.length >= 2) {
             metaSpans[1].textContent = tokenText;
           } else if (metaSpans.length === 1) {
@@ -878,8 +878,7 @@
     
     const formatted = formatMessageContent(msg.content);
     const time = msg.createdAt ? new Date(msg.createdAt).toLocaleTimeString() : "";
-    const cacheInfo2 = msg.tokenUsage?.cacheReadTokens ? ` (缓存${msg.tokenUsage.cacheReadTokens})` : "";
-    const tokens = msg.tokenUsage ? `📊 ${msg.tokenUsage.totalTokens || 0} tokens${cacheInfo2}` : "";
+    const tokens = msg.tokenUsage ? formatTokenDisplay(msg.tokenUsage) : "";
     
     // 图片显示
     let imagesHtml = "";
@@ -1180,6 +1179,21 @@
     };
   }
   
+  function formatTokenDisplay(u) {
+    if (!u) return "";
+    const inp = u.promptTokens || 0;
+    const out = u.completionTokens || 0;
+    const cacheRead = u.cacheReadTokens || 0;
+    const cacheCreate = u.cacheCreationTokens || 0;
+    let parts = [];
+    if (inp > 0) parts.push("入" + inp);
+    if (out > 0) parts.push("出" + out);
+    if (cacheRead > 0) parts.push("缓存" + cacheRead);
+    if (cacheCreate > 0) parts.push("写缓存" + cacheCreate);
+    if (parts.length === 0) parts.push((u.totalTokens || 0) + "");
+    return "📊 " + parts.join(" · ");
+  }
+
   function formatMessageContent(content, isStreaming = false) {
     if (!content) return "";
     
@@ -4008,6 +4022,8 @@ ${modelDescriptions}
           totalUsage.promptTokens += streamResultAnth.usage.promptTokens || 0;
           totalUsage.completionTokens += streamResultAnth.usage.completionTokens || 0;
           totalUsage.totalTokens += streamResultAnth.usage.totalTokens || 0;
+          totalUsage.cacheReadTokens = (totalUsage.cacheReadTokens || 0) + (streamResultAnth.usage.cacheReadTokens || 0);
+          totalUsage.cacheCreationTokens = (totalUsage.cacheCreationTokens || 0) + (streamResultAnth.usage.cacheCreationTokens || 0);
         }
         
         // 提取 thinking 内容
