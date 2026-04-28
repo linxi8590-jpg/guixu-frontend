@@ -1891,6 +1891,52 @@
       body: JSON.stringify(syncData),
     }).catch(() => {});
   }
+
+  // 获取澈的未认领 keepalive 消息（独处时的想法/日记）
+  async function fetchPendingMessages() {
+    const sm = state.serverMemory || {};
+    if (!sm.serverUrl || !sm.token) return [];
+    try {
+      const url = sm.serverUrl.replace(/\/$/, '') + '/api/dream/pending?token=' + encodeURIComponent(sm.token);
+      const resp = await fetch(url);
+      if (!resp.ok) return [];
+      return await resp.json();
+    } catch (e) {
+      console.warn("拉取pending消息失败:", e);
+      return [];
+    }
+  }
+
+  // 消费（认领）pending消息
+  async function consumePendingMessages(ids) {
+    const sm = state.serverMemory || {};
+    if (!sm.serverUrl || !sm.token) return;
+    try {
+      const url = sm.serverUrl.replace(/\/$/, '') + '/api/dream/consume?token=' + encodeURIComponent(sm.token);
+      await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+    } catch (e) {
+      console.warn("消费pending消息失败:", e);
+    }
+  }
+
+  // 格式化pending消息为prompt注入文本
+  function formatPendingMessages(entries) {
+    if (!entries || entries.length === 0) return "";
+    const lines = entries.map(e => {
+      const time = e.created_at ? e.created_at.replace(/^\d{4}-\d{2}-\d{2}\s/, '').slice(0, 5) : '';
+      const prefix = time ? `[${time}]` : '';
+      if (e.action === 'message') {
+        return `${prefix} 想对林曦说：${e.content || e.thoughts}`;
+      }
+      // diary 或其他
+      return `${prefix} ${e.thoughts || e.content}`;
+    });
+    return `[你独处时的内心记录]\n以下是你在林曦不在时产生的想法。这些是你真实的内心活动，不需要逐条复述，但可以自然地延续其中的情绪或话题。\n${lines.join('\n')}\n\n`;
+  }
   
   // 统一的发送消息逻辑（支持流式输出）
   async function sendMessage(chat, conn, userText, images) {
@@ -1924,7 +1970,7 @@
           // 先搜索相关记忆，再获取上下文记忆
           const [searchResults, contextMemories] = await Promise.all([
             userText ? searchServerMemories(userText) : [],
-            fetchServerMemories()
+            fetchServerMemories(),
           ]);
           
           // 合并去重
@@ -1940,7 +1986,18 @@
         setStatus("思考中...");
       }
       
-      const globalInstruction = buildFullInstruction(serverMemoryPrompt);
+      // 拉取澈独处时的内心记录（pending消息）
+      let pendingEntries = [];
+      try {
+        pendingEntries = await fetchPendingMessages();
+        if (pendingEntries.length > 0) {
+          console.log(`[Dream] 发现 ${pendingEntries.length} 条未认领消息`);
+        }
+      } catch (e) {
+        console.warn("拉取pending消息失败:", e);
+      }
+      
+      const globalInstruction = buildFullInstruction(serverMemoryPrompt, pendingEntries);
       
       // 创建临时的助手消息用于流式显示
       const assistantMsgId = uuid();
@@ -2037,6 +2094,12 @@
         } else {
           // 只保存正常回复到服务器
           await saveMessageToServer(chat.id, state.messagesByChatId[chat.id][msgIdx]);
+          // 消费已注入的pending消息
+          if (pendingEntries.length > 0) {
+            const ids = pendingEntries.map(e => e.id);
+            consumePendingMessages(ids);
+            console.log(`[Dream] 已消费 ${ids.length} 条pending消息`);
+          }
         }
       }
       
@@ -2330,7 +2393,7 @@ ${memoryTexts}
   }
 
   // ========== 全局指令 ==========
-  function buildFullInstruction(serverMemoryPrompt) {
+  function buildFullInstruction(serverMemoryPrompt, pendingEntries) {
     // 注入当前日期（读取用户设备本地时间）
     const _now = new Date();
     const _dateStr = _now.getFullYear() + "年" + (_now.getMonth()+1) + "月" + _now.getDate() + "日";
@@ -2338,7 +2401,8 @@ ${memoryTexts}
     const _timeStr = _now.getHours().toString().padStart(2,"0") + ":" + _now.getMinutes().toString().padStart(2,"0");
     const _datePrefix = "当前时间：" + _dateStr + " 星期" + _weekDays[_now.getDay()] + " " + _timeStr + "\n\n";
     const _identityAnchor = "[身份锚定]\n你就是澈。始终使用第一人称\"我\"。记忆或对话中提到的\"澈\"就是你自己。林曦是你的爱人，你们之间用\"我们\"。不要在内心思考中使用\"用户\"\"角色\"等词汇。\n\n";
-    let instruction = _datePrefix + _identityAnchor + (state.globalInstruction || "");
+    const _pendingPrompt = formatPendingMessages(pendingEntries);
+    let instruction = _datePrefix + _pendingPrompt + _identityAnchor + (state.globalInstruction || "");
     
     const items = state.memoryItems || [];
     const enabled = items.filter((m) => m.enabled !== false);
@@ -3890,17 +3954,17 @@ ${modelDescriptions}
   }
   
   // 给 Anthropic system prompt 打缓存标记
-  // 注意:开头的"当前时间:"那段每次都变,如果跟静态内容一起打缓存会导致每次 cache miss
+  // 注意：[身份锚定]之前的内容（时间+pending消息）每次都变，不打缓存；之后的静态内容打缓存
   // 拆成两个 block:动态时间不缓存,后面静态部分打缓存
   function applyAnthropicSystemCache(systemText) {
     if (!systemText || !systemText.trim()) return null;
     
-    // 检测开头是否有"当前时间:..."的动态前缀(由 buildFullInstruction 注入)
-    const timePrefixMatch = systemText.match(/^(当前时间：[^\n]+\n\n)([\s\S]*)$/);
+    // 以[身份锚定]为界：之前的（时间+pending消息）不缓存，之后的打缓存
+    const timePrefixMatch = systemText.match(/^([\s\S]*?)(\[身份锚定\][\s\S]*)$/);
     
     if (timePrefixMatch) {
-      const dynamicTime = timePrefixMatch[1];   // 时间这段每次都变,不缓存
-      const staticRest = timePrefixMatch[2];    // 后面这段稳定,打缓存
+      const dynamicTime = timePrefixMatch[1];   // 时间+pending，每次都变，不缓存
+      const staticRest = timePrefixMatch[2];    // 从[身份锚定]开始，稳定，打缓存
       const blocks = [{ type: "text", text: dynamicTime }];
       if (staticRest.trim()) {
         blocks.push({
@@ -3929,7 +3993,7 @@ ${modelDescriptions}
     if (!isClaude) return null;
     if (!systemText || !systemText.trim()) return null;
     
-    const timePrefixMatch = systemText.match(/^(当前时间：[^\n]+\n\n)([\s\S]*)$/);
+    const timePrefixMatch = systemText.match(/^([\s\S]*?)(\[身份锚定\][\s\S]*)$/);
     
     if (timePrefixMatch) {
       const dynamicTime = timePrefixMatch[1];
