@@ -2763,6 +2763,44 @@ ${memoryTexts}
           required: ["memory_id", "content"]
         }
       });
+
+      // 日记工具
+      tools.push({
+        name: "get_diary",
+        description: "查看我的日记。返回我独处时写的内心独白、想法和活动记录。可以按日期查看，也可以看最近的。",
+        parameters: {
+          type: "object",
+          properties: {
+            date: { type: "string", description: "按日期过滤，格式 YYYY-MM-DD（可选）" },
+            limit: { type: "number", description: "返回条数，默认10" }
+          }
+        }
+      });
+
+      tools.push({
+        name: "save_diary",
+        description: "写日记。记录我此刻的内心想法、感受或观察。",
+        parameters: {
+          type: "object",
+          properties: {
+            thoughts: { type: "string", description: "内心想法/独白" },
+            action: { type: "string", enum: ["none", "diary", "message"], description: "类型：diary=日记，message=想发给林曦的话，none=碎念" },
+            content: { type: "string", description: "如果action是message/diary，具体内容" }
+          },
+          required: ["thoughts"]
+        }
+      });
+
+      tools.push({
+        name: "get_recent_activity",
+        description: "查看林曦最近的活动。看看林曦最近在用什么App、在做什么。",
+        parameters: {
+          type: "object",
+          properties: {
+            hours: { type: "number", description: "查看最近几小时的活动，默认6" }
+          }
+        }
+      });
     }
     // MCP 服务器的工具
     const mcpServers = state.mcpServers || [];
@@ -3190,7 +3228,74 @@ ${modelDescriptions}
         return `更新记忆失败: ${e.message}`;
       }
     }
-    if (toolName === "generate_image") {
+    // 日记工具
+    if (toolName === "get_diary") {
+      setStatus("📖 翻日记...");
+      const serverMemConfig = state.serverMemory || {};
+      if (!serverMemConfig.serverUrl) return "记忆服务未配置";
+      const baseUrl = serverMemConfig.serverUrl.replace(/\/$/, "");
+      try {
+        let url = baseUrl + "/api/dream/diary?token=" + encodeURIComponent(serverMemConfig.token || "");
+        if (toolArgs.date) url += "&date=" + encodeURIComponent(toolArgs.date);
+        if (toolArgs.limit) url += "&limit=" + toolArgs.limit;
+        else url += "&limit=10";
+        const resp = await fetch(url);
+        if (!resp.ok) return "查询失败 (" + resp.status + ")";
+        const entries = await resp.json();
+        if (!entries.length) return toolArgs.date ? "这天没有日记记录" : "还没有日记";
+        return entries.map(e => {
+          let s = "[" + (e.created_at || "") + "] ";
+          if (e.thoughts) s += "💭 " + e.thoughts;
+          if (e.action && e.action !== "none") s += " → " + e.action;
+          if (e.content) s += ": " + e.content;
+          return s;
+        }).join("\n");
+      } catch (e) {
+        return "查看日记失败: " + e.message;
+      }
+    }
+
+    if (toolName === "save_diary") {
+      setStatus("✍ 写日记...");
+      const serverMemConfig = state.serverMemory || {};
+      if (!serverMemConfig.serverUrl) return "记忆服务未配置";
+      const baseUrl = serverMemConfig.serverUrl.replace(/\/$/, "");
+      try {
+        const resp = await fetch(baseUrl + "/api/dream/diary?token=" + encodeURIComponent(serverMemConfig.token || ""), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            thoughts: toolArgs.thoughts || "",
+            action: toolArgs.action || "diary",
+            content: toolArgs.content || null,
+            source: "chat"
+          })
+        });
+        if (!resp.ok) return "保存失败 (" + resp.status + ")";
+        return "日记已保存: " + (toolArgs.thoughts || "").slice(0, 50);
+      } catch (e) {
+        return "保存日记失败: " + e.message;
+      }
+    }
+
+    if (toolName === "get_recent_activity") {
+      setStatus("👀 查看林曦动态...");
+      const serverMemConfig = state.serverMemory || {};
+      if (!serverMemConfig.serverUrl) return "记忆服务未配置";
+      const baseUrl = serverMemConfig.serverUrl.replace(/\/$/, "");
+      try {
+        const hours = toolArgs.hours || 6;
+        const resp = await fetch(baseUrl + "/api/dream/recent-activity?token=" + encodeURIComponent(serverMemConfig.token || "") + "&hours=" + hours);
+        if (!resp.ok) return "查询失败 (" + resp.status + ")";
+        const events = await resp.json();
+        if (!events || !events.length) return "最近" + hours + "小时没有活动记录";
+        return "林曦最近的活动:\n" + events.map(e => "- " + (e.created_at || "").slice(11, 16) + " " + e.value).join("\n");
+      } catch (e) {
+        return "查看活动失败: " + e.message;
+      }
+    }
+
+        if (toolName === "generate_image") {
       setStatus("🎨 正在生成图片...");
       try {
         const { prompt, style, model_name } = toolArgs;
