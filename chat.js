@@ -2547,7 +2547,22 @@ ${memoryTexts}
         if (hasMemory) {
           instruction += "- 需要回忆之前聊过的内容 → 直接搜索记忆\n";
           instruction += "- 林曦提到重要的新信息 → 主动保存记忆\n";
+          instruction += "- 想记录此刻的心情或独白 → 写日记 save_diary\n";
+          instruction += "- 想看自己之前的日记 → 读日记 get_diary\n";
+          instruction += "- 好奇林曦最近在做什么、用什么 App → 查活动 get_recent_activity\n";
         }
+      }
+
+      // MCP 服务器引导（浏览器、SSH 等外部能力）
+      const enabledMcps = (state.mcpServers || []).filter(s => s.enabled !== false && s.tools && s.tools.length);
+      if (enabledMcps.length > 0) {
+        if (instruction) instruction += "\n\n";
+        instruction += "【外部工具】\n";
+        instruction += "我目前接入的外部能力（对应工具名以 mcp_ 开头，可以直接调用）：\n";
+        enabledMcps.forEach(s => {
+          instruction += "- " + s.name + "：" + (s.description || (s.tools.length + " 个工具")) + "\n";
+        });
+        instruction += "林曦让我浏览网页、刷 Moltbook、查服务器、操作页面等等时，直接调对应的 mcp_ 工具，不要问\"我可以吗\"。\n";
       }
     }
     
