@@ -5494,6 +5494,15 @@ type: fact, preference, habit, relationship, understanding, self
         syncPendingToChat();
       }
     });
+    // 接收 Service Worker 推送消息，实时显示气泡
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.addEventListener("message", (event) => {
+        if (event.data?.type === "dream-message") {
+          console.log("[Dream] 收到SW推送，同步消息到对话框");
+          syncPendingToChat();
+        }
+      });
+    }
     // 定期自动保存（每30秒）- 只保存配置
     setInterval(() => {
       saveState(state);

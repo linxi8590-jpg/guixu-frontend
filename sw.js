@@ -18,14 +18,20 @@ self.addEventListener('push', function(event) {
     };
     
     event.waitUntil(
-      self.registration.showNotification(data.title || '澈', options)
+      Promise.all([
+        self.registration.showNotification(data.title || '澈', options),
+        self.clients.matchAll({ type: 'window' }).then(function(clients) {
+          clients.forEach(function(client) {
+            client.postMessage({ type: 'dream-message', data: data });
+          });
+        })
+      ])
     );
   } catch (e) {
     console.error('[SW] push parse error:', e);
   }
 });
 
-// 点击通知打开归墟
 self.addEventListener('notificationclick', function(event) {
   event.notification.close();
   const url = event.notification.data?.url || '/';
@@ -47,7 +53,6 @@ self.addEventListener('install', function() {
 });
 
 self.addEventListener('activate', function(event) {
-  // 清理旧版本的离线缓存
   event.waitUntil(
     caches.keys().then(function(keys) {
       return Promise.all(
