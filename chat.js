@@ -1944,6 +1944,28 @@
     // 同步当前连接信息到后端（keepalive用）
     syncDreamConnection(chat, conn);
     
+    // 首次发消息时请求推送权限（需要用户手势触发）
+    if ("Notification" in window && Notification.permission === "default" && "PushManager" in window) {
+      Notification.requestPermission().then(p => {
+        if (p === "granted") {
+          console.log("[Push] 权限已授予，注册推送...");
+          navigator.serviceWorker.ready.then(async reg => {
+            const sm = state.serverMemory || {};
+            if (!sm.serverUrl || !sm.token) return;
+            try {
+              const vapidResp = await fetch(sm.serverUrl.replace(/\/$/, "") + "/api/dream/vapid-public-key");
+              const { publicKey } = await vapidResp.json();
+              const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: publicKey });
+              await fetch(sm.serverUrl.replace(/\/$/, "") + "/api/dream/push-subscribe?token=" + encodeURIComponent(sm.token), {
+                method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sub),
+              });
+              console.log("[Push] 订阅完成");
+            } catch(e) { console.warn("[Push] 注册失败:", e); }
+          });
+        }
+      });
+    }
+    
     try {
       const historyMsgs = state.messagesByChatId[chat.id].map((m) => ({
         role: m.role,
@@ -5397,18 +5419,15 @@ type: fact, preference, habit, relationship, understanding, self
     setInterval(() => {
       saveState(state);
     }, 30000);
-    // Web Push 推送注册
-    if ('serviceWorker' in navigator && 'PushManager' in window) {
+    // Web Push 推送注册（延迟执行，不阻塞 UI）
+    setTimeout(async () => {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
       try {
         const swReg = await navigator.serviceWorker.register('/sw.js');
         console.log('[Push] Service Worker 已注册');
         
-        // 请求通知权限
-        const permission = await Notification.requestPermission();
-        if (permission !== 'granted') {
-          console.log('[Push] 通知权限未授予:', permission);
-        } else {
-          // 获取或创建推送订阅
+        // 已有权限才继续，不主动弹窗（避免干扰 UI）
+        if (Notification.permission === 'granted') {
           let subscription = await swReg.pushManager.getSubscription();
           if (!subscription) {
             const sm = state.serverMemory || {};
@@ -5426,8 +5445,6 @@ type: fact, preference, habit, relationship, understanding, self
               }
             }
           }
-          
-          // 把订阅信息发到后端
           if (subscription) {
             const sm = state.serverMemory || {};
             if (sm.serverUrl && sm.token) {
@@ -5439,11 +5456,14 @@ type: fact, preference, habit, relationship, understanding, self
                 .catch(e => console.warn('[Push] 同步失败:', e));
             }
           }
+        } else if (Notification.permission === 'default') {
+          // 权限未决定：等用户第一次发消息时再请求（见 sendMessage）
+          console.log('[Push] 通知权限待请求，将在首次发消息时弹窗');
         }
       } catch (e) {
         console.warn('[Push] 注册失败:', e);
       }
-    }
+    }, 3000);
   }
 
   if (document.readyState === "loading") {
