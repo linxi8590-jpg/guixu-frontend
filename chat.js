@@ -1851,6 +1851,24 @@
     await sendMessage(chat, conn, content, images);
   }
   
+  // 推送完整请求快照到后端（cache_warmup + keepalive 命中缓存用）
+  function pushDreamSnapshot(body, conn) {
+    const sm = state.serverMemory || {};
+    if (!sm.serverUrl || !sm.token) return;
+    const snapshot = {
+      system: body.system || null,
+      tools: body.tools || null,
+      messages: body.messages || [],
+      model: body.model || '',
+    };
+    const url = sm.serverUrl.replace(/\/$/, '') + '/api/dream/snapshot?token=' + encodeURIComponent(sm.token);
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(snapshot),
+    }).catch(() => {});
+  }
+  
   // 同步当前连接信息到后端（供keepalive使用同一模型/连接）
   function syncDreamConnection(chat, conn) {
     const sm = state.serverMemory || {};
@@ -3829,6 +3847,11 @@ ${modelDescriptions}
           body.max_tokens = Math.max(maxTokens, 16000);
           delete body.temperature;
           console.log(`[Claude Thinking] 已启用，预算: ${body.thinking.budget_tokens} tokens`);
+        }
+        
+        // 推送请求快照到后端（cache_warmup + keepalive 用）
+        if (!chatId || chatId === (getActiveChat(state) || {}).id) {
+          pushDreamSnapshot(body, conn);
         }
         
         // 流式请求（解决超时 + 实时显示）
