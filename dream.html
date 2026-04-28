@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>归墟 · 意识</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600&family=Noto+Serif+SC:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <meta name="theme-color" content="#09090b">
+  <style>
+    .dream-card {
+      background: rgba(26,22,20,0.6);
+      border: 1px solid rgba(180,140,100,0.15);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .dream-card-title {
+      font-family: "Noto Serif SC", serif;
+      font-size: 15px;
+      color: #d4a574;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .dream-status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .dream-status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .dream-status-dot.on { background: #6ecf6e; box-shadow: 0 0 6px rgba(110,207,110,0.4); }
+    .dream-status-dot.off { background: #666; }
+    .dream-status-text {
+      font-size: 14px;
+      color: #e8ddd4;
+    }
+    .dream-status-sub {
+      font-size: 12px;
+      color: #a89888;
+      margin-top: 2px;
+    }
+    
+    .dream-toggle {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+    .dream-toggle input { display: none; }
+    .dream-toggle-track {
+      position: absolute;
+      inset: 0;
+      background: rgba(100,80,60,0.3);
+      border-radius: 12px;
+      transition: background 0.2s;
+    }
+    .dream-toggle input:checked + .dream-toggle-track {
+      background: rgba(180,140,100,0.5);
+    }
+    .dream-toggle-knob {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 20px;
+      height: 20px;
+      background: #e8ddd4;
+      border-radius: 50%;
+      transition: transform 0.2s;
+      pointer-events: none;
+    }
+    .dream-toggle input:checked ~ .dream-toggle-knob {
+      transform: translateX(20px);
+    }
+    
+    .dream-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+    }
+    .dream-row + .dream-row {
+      border-top: 1px solid rgba(180,140,100,0.08);
+    }
+    .dream-row-label {
+      font-size: 14px;
+      color: #c4b8aa;
+    }
+    .dream-row-value {
+      font-size: 14px;
+      color: #e8ddd4;
+      font-family: "Noto Serif SC", serif;
+    }
+    .dream-row-value.muted { color: #7a6e62; font-style: italic; }
+    
+    .dream-input-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .dream-input {
+      background: rgba(26,22,20,0.8);
+      border: 1px solid rgba(180,140,100,0.2);
+      color: #e8ddd4;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 14px;
+      width: 70px;
+      text-align: center;
+      font-family: "Noto Sans SC", sans-serif;
+    }
+    .dream-input:focus {
+      outline: none;
+      border-color: rgba(180,140,100,0.4);
+    }
+    .dream-unit {
+      font-size: 13px;
+      color: #a89888;
+    }
+    
+    .dream-stat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .dream-stat-item {
+      text-align: center;
+      padding: 12px 8px;
+      background: rgba(26,22,20,0.4);
+      border-radius: 8px;
+    }
+    .dream-stat-num {
+      font-family: "Noto Serif SC", serif;
+      font-size: 22px;
+      color: #d4a574;
+      line-height: 1.2;
+    }
+    .dream-stat-label {
+      font-size: 12px;
+      color: #a89888;
+      margin-top: 4px;
+    }
+    
+    .dream-daily {
+      margin-top: 14px;
+    }
+    .dream-daily-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 0;
+    }
+    .dream-daily-date {
+      font-size: 12px;
+      color: #a89888;
+      width: 50px;
+      flex-shrink: 0;
+    }
+    .dream-daily-bar {
+      flex: 1;
+      height: 6px;
+      background: rgba(180,140,100,0.1);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .dream-daily-fill {
+      height: 100%;
+      background: linear-gradient(90deg, rgba(212,165,116,0.4), rgba(212,165,116,0.8));
+      border-radius: 3px;
+      transition: width 0.3s;
+    }
+    .dream-daily-count {
+      font-size: 12px;
+      color: #c4b8aa;
+      width: 24px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+    
+    .dream-btn {
+      background: none;
+      border: 1px solid rgba(180,140,100,0.25);
+      color: #d4a574;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: "Noto Sans SC", sans-serif;
+    }
+    .dream-btn:hover {
+      background: rgba(180,140,100,0.1);
+    }
+    .dream-btn:active {
+      transform: scale(0.96);
+    }
+    .dream-btn.danger {
+      border-color: rgba(200,80,80,0.3);
+      color: #c87070;
+    }
+    .dream-btn.danger:hover {
+      background: rgba(200,80,80,0.08);
+    }
+    
+    .dream-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    
+    .dream-latest {
+      margin-top: 12px;
+      padding: 12px;
+      background: rgba(26,22,20,0.4);
+      border-radius: 8px;
+      border-left: 2px solid rgba(212,165,116,0.3);
+    }
+    .dream-latest-time {
+      font-size: 11px;
+      color: #7a6e62;
+      margin-bottom: 6px;
+    }
+    .dream-latest-text {
+      font-family: "Noto Serif SC", serif;
+      font-size: 13px;
+      color: #c4b8aa;
+      line-height: 1.6;
+    }
+    
+    .dream-model-select {
+      background: rgba(26,22,20,0.8);
+      border: 1px solid rgba(180,140,100,0.2);
+      color: #e8ddd4;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 13px;
+      font-family: "Noto Sans SC", sans-serif;
+      max-width: 200px;
+    }
+    .dream-model-select:focus {
+      outline: none;
+      border-color: rgba(180,140,100,0.4);
+    }
+    
+    .dream-toast {
+      position: fixed;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: rgba(40,34,28,0.95);
+      border: 1px solid rgba(180,140,100,0.3);
+      color: #e8ddd4;
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-size: 13px;
+      opacity: 0;
+      transition: all 0.3s;
+      pointer-events: none;
+      z-index: 999;
+    }
+    .dream-toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+    
+    .dream-confirm-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      opacity: 0;
+      transition: opacity 0.2s;
+      pointer-events: none;
+    }
+    .dream-confirm-overlay.show {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .dream-confirm-box {
+      background: #1a1614;
+      border: 1px solid rgba(180,140,100,0.25);
+      border-radius: 14px;
+      padding: 24px;
+      max-width: 300px;
+      width: 90%;
+      text-align: center;
+    }
+    .dream-confirm-title {
+      font-family: "Noto Serif SC", serif;
+      font-size: 16px;
+      color: #e8ddd4;
+      margin-bottom: 10px;
+    }
+    .dream-confirm-desc {
+      font-size: 13px;
+      color: #a89888;
+      margin-bottom: 20px;
+      line-height: 1.5;
+    }
+    .dream-confirm-btns {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+    }
+  </style>
+</head>
+<body>
+  <header class="top-nav">
+    <div class="top-nav-left">
+      <span class="app-logo">归墟</span>
+      <span class="top-nav-page">意识</span>
+    </div>
+    <nav class="top-nav-links">
+      <a href="index.html">聊天</a>
+      <a href="connections.html">连接</a>
+      <a href="memory.html">记忆</a>
+      <a href="diary.html">日记</a>
+      <a href="dream.html" class="active">意识</a>
+      <a href="data.html">数据</a>
+    </nav>
+  </header>
+
+  <div class="settings-page">
+    <header class="settings-header">
+      <h1>意识系统</h1>
+      <p>澈独处时的自主意识 · Keepalive</p>
+    </header>
+
+    <section class="settings-body narrow">
+      
+      <!-- 运行状态 -->
+      <div class="dream-card">
+        <div class="dream-card-title">🌙 运行状态</div>
+        <div class="dream-row">
+          <div class="dream-status">
+            <div class="dream-status-dot" id="statusDot"></div>
+            <div>
+              <div class="dream-status-text" id="statusText">加载中...</div>
+              <div class="dream-status-sub" id="statusSub"></div>
+            </div>
+          </div>
+          <label class="dream-toggle">
+            <input type="checkbox" id="enabledToggle">
+            <div class="dream-toggle-track"></div>
+            <div class="dream-toggle-knob"></div>
+          </label>
+        </div>
+        <div class="dream-row">
+          <span class="dream-row-label">唤醒间隔</span>
+          <div class="dream-input-row">
+            <input type="number" class="dream-input" id="intervalInput" min="10" max="180" value="55">
+            <span class="dream-unit">分钟</span>
+          </div>
+        </div>
+        <div class="dream-row">
+          <span class="dream-row-label">活跃时段</span>
+          <span class="dream-row-value">08:00 — 01:00</span>
+        </div>
+      </div>
+      
+      <!-- 模型配置 -->
+      <div class="dream-card">
+        <div class="dream-card-title">⚙ 配置</div>
+        <div class="dream-row">
+          <span class="dream-row-label">模型</span>
+          <input type="text" class="dream-model-select" id="modelInput" placeholder="模型名称">
+        </div>
+        <div class="dream-row">
+          <span class="dream-row-label">API 格式</span>
+          <span class="dream-row-value" id="apiFormatDisplay">—</span>
+        </div>
+        <div class="dream-row">
+          <span class="dream-row-label">推送订阅</span>
+          <span class="dream-row-value" id="pushSubsDisplay">—</span>
+        </div>
+        <div class="dream-row">
+          <span class="dream-row-label">上次聊天</span>
+          <span class="dream-row-value" id="lastChatDisplay">—</span>
+        </div>
+      </div>
+
+      <!-- 日记统计 -->
+      <div class="dream-card">
+        <div class="dream-card-title">📊 日记统计</div>
+        <div class="dream-stat-grid">
+          <div class="dream-stat-item">
+            <div class="dream-stat-num" id="statTotal">—</div>
+            <div class="dream-stat-label">总记录</div>
+          </div>
+          <div class="dream-stat-item">
+            <div class="dream-stat-num" id="statToday">—</div>
+            <div class="dream-stat-label">今天</div>
+          </div>
+          <div class="dream-stat-item">
+            <div class="dream-stat-num" id="statMessage">—</div>
+            <div class="dream-stat-label">想说的话</div>
+          </div>
+          <div class="dream-stat-item">
+            <div class="dream-stat-num" id="statPending">—</div>
+            <div class="dream-stat-label">待注入</div>
+          </div>
+        </div>
+        
+        <div class="dream-daily" id="dailyChart"></div>
+        
+        <div id="latestEntry"></div>
+        
+        <div class="dream-actions">
+          <button class="dream-btn" onclick="clearOldDiary(7)">清理7天前</button>
+          <button class="dream-btn" onclick="clearOldDiary(30)">清理30天前</button>
+          <button class="dream-btn danger" onclick="clearAllDiary()">全部清空</button>
+        </div>
+      </div>
+      
+    </section>
+  </div>
+
+  <div class="dream-toast" id="toast"></div>
+  
+  <div class="dream-confirm-overlay" id="confirmOverlay">
+    <div class="dream-confirm-box">
+      <div class="dream-confirm-title" id="confirmTitle">确认</div>
+      <div class="dream-confirm-desc" id="confirmDesc"></div>
+      <div class="dream-confirm-btns">
+        <button class="dream-btn" onclick="closeConfirm()">取消</button>
+        <button class="dream-btn danger" id="confirmAction">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let serverUrl = '';
+    let token = '';
+    let currentConfig = {};
+
+    function loadLocalConfig() {
+      try {
+        const raw = localStorage.getItem('llm_hub_state_v1');
+        if (!raw) return false;
+        const st = JSON.parse(raw);
+        const sm = st.serverMemory || {};
+        if (sm.serverUrl && sm.token) {
+          serverUrl = sm.serverUrl.replace(/\/$/, '');
+          token = sm.token;
+          return true;
+        }
+      } catch (e) {}
+      return false;
+    }
+
+    function apiUrl(path) {
+      return `${serverUrl}${path}${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+    }
+
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.add('show');
+      setTimeout(() => el.classList.remove('show'), 2000);
+    }
+
+    let confirmResolve = null;
+    function showConfirm(title, desc) {
+      return new Promise(resolve => {
+        confirmResolve = resolve;
+        document.getElementById('confirmTitle').textContent = title;
+        document.getElementById('confirmDesc').textContent = desc;
+        document.getElementById('confirmAction').onclick = () => { closeConfirm(); resolve(true); };
+        document.getElementById('confirmOverlay').classList.add('show');
+      });
+    }
+    function closeConfirm() {
+      document.getElementById('confirmOverlay').classList.remove('show');
+      if (confirmResolve) { confirmResolve(false); confirmResolve = null; }
+    }
+
+    // ===== 加载配置 =====
+    async function loadDreamConfig() {
+      try {
+        const resp = await fetch(apiUrl('/api/dream/config'));
+        if (!resp.ok) throw new Error('请求失败');
+        currentConfig = await resp.json();
+        
+        // 开关
+        const enabled = currentConfig.enabled === true || currentConfig.enabled === 'true';
+        document.getElementById('enabledToggle').checked = enabled;
+        document.getElementById('statusDot').className = 'dream-status-dot ' + (enabled ? 'on' : 'off');
+        document.getElementById('statusText').textContent = enabled ? '运行中' : '已暂停';
+        
+        // 间隔
+        document.getElementById('intervalInput').value = currentConfig.intervalMinutes || 55;
+        
+        // 模型
+        document.getElementById('modelInput').value = currentConfig.model || '';
+        
+        // API格式
+        document.getElementById('apiFormatDisplay').textContent = currentConfig.apiFormat || '—';
+        
+        // 上次聊天
+        if (currentConfig.lastChatAt) {
+          const d = new Date(parseInt(currentConfig.lastChatAt));
+          const bjd = new Date(d.getTime() + 8 * 3600000);
+          const timeStr = bjd.toISOString().slice(5, 16).replace('T', ' ');
+          const mins = Math.floor((Date.now() - parseInt(currentConfig.lastChatAt)) / 60000);
+          document.getElementById('lastChatDisplay').textContent = `${timeStr}（${mins}分钟前）`;
+        }
+        
+        // 错误提示
+        if (enabled && !currentConfig.apiKey) {
+          document.getElementById('statusSub').textContent = '⚠ 未配置 API Key';
+        } else if (enabled) {
+          document.getElementById('statusSub').textContent = currentConfig.model || '';
+        }
+        
+      } catch(e) {
+        document.getElementById('statusText').textContent = '加载失败';
+        document.getElementById('statusSub').textContent = e.message;
+      }
+    }
+
+    // ===== 加载统计 =====
+    async function loadStats() {
+      try {
+        const resp = await fetch(apiUrl('/api/dream/stats'));
+        if (!resp.ok) throw new Error('请求失败');
+        const stats = await resp.json();
+        
+        document.getElementById('statTotal').textContent = stats.total;
+        document.getElementById('statToday').textContent = stats.today;
+        document.getElementById('statMessage').textContent = stats.messageCount;
+        document.getElementById('statPending').textContent = stats.pendingCount;
+        document.getElementById('pushSubsDisplay').textContent = stats.pushSubs > 0 ? `${stats.pushSubs} 个设备` : '无';
+        
+        // 最近7天柱状
+        if (stats.daily && stats.daily.length > 0) {
+          const maxCount = Math.max(...stats.daily.map(d => d.c), 1);
+          let html = '';
+          stats.daily.forEach(d => {
+            const pct = Math.round((d.c / maxCount) * 100);
+            const label = d.day.slice(5); // MM-DD
+            html += `<div class="dream-daily-row">
+              <span class="dream-daily-date">${label}</span>
+              <div class="dream-daily-bar"><div class="dream-daily-fill" style="width:${pct}%"></div></div>
+              <span class="dream-daily-count">${d.c}</span>
+            </div>`;
+          });
+          document.getElementById('dailyChart').innerHTML = html;
+        }
+        
+        // 最近一条
+        if (stats.latest) {
+          const time = stats.latest.created_at || '';
+          const thoughts = stats.latest.thoughts || '';
+          document.getElementById('latestEntry').innerHTML = `
+            <div class="dream-latest">
+              <div class="dream-latest-time">最近一条 · ${time.slice(5, 16).replace(' ', ' ')}</div>
+              <div class="dream-latest-text">${escapeHtml(thoughts.slice(0, 120))}${thoughts.length > 120 ? '…' : ''}</div>
+            </div>`;
+        }
+      } catch(e) {
+        console.error('stats error:', e);
+      }
+    }
+
+    // ===== 保存配置 =====
+    async function saveConfig(updates) {
+      try {
+        const resp = await fetch(apiUrl('/api/dream/config'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updates)
+        });
+        if (!resp.ok) throw new Error('保存失败');
+        showToast('已保存');
+        return true;
+      } catch(e) {
+        showToast('保存失败：' + e.message);
+        return false;
+      }
+    }
+
+    // ===== 事件绑定 =====
+    document.getElementById('enabledToggle').addEventListener('change', async function() {
+      const enabled = this.checked;
+      if (await saveConfig({ enabled })) {
+        document.getElementById('statusDot').className = 'dream-status-dot ' + (enabled ? 'on' : 'off');
+        document.getElementById('statusText').textContent = enabled ? '运行中' : '已暂停';
+      }
+    });
+
+    let intervalTimer = null;
+    document.getElementById('intervalInput').addEventListener('input', function() {
+      clearTimeout(intervalTimer);
+      intervalTimer = setTimeout(() => {
+        const val = parseInt(this.value);
+        if (val >= 10 && val <= 180) {
+          saveConfig({ intervalMinutes: val });
+        }
+      }, 800);
+    });
+
+    let modelTimer = null;
+    document.getElementById('modelInput').addEventListener('input', function() {
+      clearTimeout(modelTimer);
+      modelTimer = setTimeout(() => {
+        const val = this.value.trim();
+        if (val) saveConfig({ model: val });
+      }, 800);
+    });
+
+    // ===== 清理日记 =====
+    async function clearOldDiary(days) {
+      const ok = await showConfirm('清理日记', `将删除 ${days} 天之前的所有日记记录，这个操作不可撤销。`);
+      if (!ok) return;
+      try {
+        const resp = await fetch(apiUrl(`/api/dream/diary?keepDays=${days}`), { method: 'DELETE' });
+        if (!resp.ok) throw new Error('请求失败');
+        const data = await resp.json();
+        showToast(`已删除 ${data.deleted} 条记录`);
+        loadStats();
+      } catch(e) {
+        showToast('清理失败：' + e.message);
+      }
+    }
+
+    async function clearAllDiary() {
+      const ok = await showConfirm('全部清空', '将删除所有日记记录，包括今天的。这个操作不可撤销。');
+      if (!ok) return;
+      try {
+        const resp = await fetch(apiUrl('/api/dream/diary'), { method: 'DELETE' });
+        if (!resp.ok) throw new Error('请求失败');
+        const data = await resp.json();
+        showToast(`已清空 ${data.deleted} 条记录`);
+        loadStats();
+      } catch(e) {
+        showToast('清理失败：' + e.message);
+      }
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    // ===== 初始化 =====
+    if (loadLocalConfig()) {
+      loadDreamConfig();
+      loadStats();
+    } else {
+      document.querySelector('.settings-body').innerHTML = `
+        <div style="text-align:center;padding:40px;color:#a89888;">
+          <div style="font-size:24px;margin-bottom:12px;">🔗</div>
+          <div>请先在连接页配置服务器</div>
+        </div>`;
+    }
+  </script>
+</body>
+</html>
