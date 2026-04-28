@@ -3978,7 +3978,8 @@ ${modelDescriptions}
         }
         
         // 推送请求快照到后端（cache_warmup + keepalive 用）
-        if (!chatId || chatId === (getActiveChat(state) || {}).id) {
+        // 只在首轮推送，工具调用续轮不推（避免快照包含工具中间状态）
+        if ((!chatId || chatId === (getActiveChat(state) || {}).id) && iterationCount === 1) {
           pushDreamSnapshot(body, connection);
         }
         
@@ -4134,6 +4135,15 @@ ${modelDescriptions}
   function applyAnthropicMessageCache(bodyMessages) {
     if (!Array.isArray(bodyMessages) || bodyMessages.length < 3) return bodyMessages;
     
+    // 先清理所有消息上已有的 cache_control（防止多轮工具调用累积）
+    for (const msg of bodyMessages) {
+      if (Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (block && block.cache_control) delete block.cache_control;
+        }
+      }
+    }
+    
     const cacheIdx = bodyMessages.length - 2;
     const targetMsg = bodyMessages[cacheIdx];
     if (!targetMsg) return bodyMessages;
@@ -4146,7 +4156,7 @@ ${modelDescriptions}
       }];
     } else if (Array.isArray(targetMsg.content) && targetMsg.content.length > 0) {
       const lastBlock = targetMsg.content[targetMsg.content.length - 1];
-      if (lastBlock && !lastBlock.cache_control) {
+      if (lastBlock) {
         lastBlock.cache_control = { type: "ephemeral", ttl: "1h" };
       }
     }
