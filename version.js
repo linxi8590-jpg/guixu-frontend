@@ -1,1 +1,1 @@
-const GUIXU_VERSION = "v60";
+const GUIXU_VERSION = "v61";
