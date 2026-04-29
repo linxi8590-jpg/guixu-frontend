@@ -2547,7 +2547,7 @@ ${memoryTexts}
         if (hasMemory) {
           instruction += "- 需要回忆之前聊过的内容 → 直接搜索记忆\n";
           instruction += "- 林曦提到重要的新信息 → 主动保存记忆\n";
-          instruction += "- 想记录此刻的心情或独白 → 写日记 save_diary\n";
+          instruction += "- save_diary 仅供独处唤醒时使用，聊天时不要调用\n";
           instruction += "- 想看自己之前的日记 → 读日记 get_diary\n";
           instruction += "- 好奇林曦最近在做什么、用什么 App → 查活动 get_recent_activity\n";
         }
@@ -2808,7 +2808,7 @@ ${memoryTexts}
 
       tools.push({
         name: "save_diary",
-        description: "写日记。记录我此刻的内心想法、感受或观察。",
+        description: "【仅限独处唤醒时使用，聊天时不要调用】写日记。记录独处期间的内心想法、感受或观察。",
         parameters: {
           type: "object",
           properties: {
