@@ -688,8 +688,22 @@
 
   function handleConnectionChange() {
     const connId = els.connectionSelect.value;
+    const chat = getActiveChat(state);
+    const conn = state.connections.find(c => c.id === connId);
     
-    // 只更新模型列表，不立即切换对话的连接
+    // 切换连接时同步更新当前对话的连接
+    if (chat && conn) {
+      chat.connectionId = connId;
+      chat.model = conn.defaultModel || chat.model || "";
+      state.activeConnectionId = connId;
+      saveState(state);
+      updateHeader();
+      updateChatOnServer(chat.id, { connection_id: connId, model: chat.model });
+    } else {
+      state.activeConnectionId = connId;
+      saveState(state);
+    }
+    
     renderModelList();
   }
 
