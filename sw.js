@@ -1,8 +1,23 @@
-// 归墟 Service Worker — Web Push 推送 + 旧缓存清理
+// 归墟 Service Worker — Web Push + 自动更新
 
+const SW_VERSION = 'v61';
+
+// HTML 页面永远走网络（保证 PWA 每次打开拿最新代码）
+self.addEventListener('fetch', function(event) {
+  const url = new URL(event.request.url);
+  // 只拦截同源的 HTML 导航请求
+  if (event.request.mode === 'navigate' && url.origin === self.location.origin) {
+    event.respondWith(
+      fetch(event.request).catch(function() {
+        return caches.match(event.request);
+      })
+    );
+  }
+});
+
+// Push 通知
 self.addEventListener('push', function(event) {
   if (!event.data) return;
-  
   try {
     const data = event.data.json();
     const options = {
@@ -11,12 +26,8 @@ self.addEventListener('push', function(event) {
       badge: '/icon-192.png',
       tag: 'guixu-dream-' + Date.now(),
       renotify: true,
-      data: {
-        url: self.registration.scope,
-        ...data.data,
-      },
+      data: { url: self.registration.scope, ...data.data },
     };
-    
     event.waitUntil(
       Promise.all([
         self.registration.showNotification(data.title || '澈', options),
@@ -35,7 +46,6 @@ self.addEventListener('push', function(event) {
 self.addEventListener('notificationclick', function(event) {
   event.notification.close();
   const url = event.notification.data?.url || '/';
-  
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clientList) {
       for (const client of clientList) {
@@ -57,10 +67,7 @@ self.addEventListener('activate', function(event) {
     caches.keys().then(function(keys) {
       return Promise.all(
         keys.filter(function(k) { return k.startsWith('llm-hub-'); })
-            .map(function(k) { 
-              console.log('[SW] 清理旧缓存:', k);
-              return caches.delete(k); 
-            })
+            .map(function(k) { return caches.delete(k); })
       );
     }).then(function() {
       return self.clients.claim();
