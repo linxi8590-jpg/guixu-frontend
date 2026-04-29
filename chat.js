@@ -4038,7 +4038,7 @@ ${modelDescriptions}
         
         if (!resp.ok) {
           const errText = await resp.text().catch(() => '');
-          throw new Error("Anthropic API 错误: " + resp.status + " " + errText.slice(0, 200));
+          throw new Error("Anthropic API 错误 [" + url + "]: " + resp.status + " " + errText.slice(0, 200));
         }
         
         let partialTextAnth = finalText;
@@ -4448,7 +4448,7 @@ ${modelDescriptions}
       
       if (!resp.ok) {
         const text = await resp.text();
-        throw new Error("Anthropic 接口错误：" + resp.status + " " + text);
+        throw new Error("Anthropic 接口错误 [" + url + "]: " + resp.status + " " + text);
       }
       
       const data = await resp.json();
@@ -4693,7 +4693,7 @@ ${modelDescriptions}
       
       if (!resp.ok) {
         const text = await resp.text();
-        throw new Error("Anthropic 接口错误：" + resp.status + " " + text);
+        throw new Error("Anthropic 接口错误 [" + url + "]: " + resp.status + " " + text);
       }
       
       return await processAnthropicStream(resp, onChunk);

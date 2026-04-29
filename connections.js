@@ -648,7 +648,7 @@
 
       if (!resp.ok) {
         const text = await resp.text();
-        throw new Error("Claude 接口错误：" + resp.status + " " + text);
+        throw new Error("Claude 接口错误 [" + url + "]: " + resp.status + " " + text);
       }
       const data = await resp.json();
       if (
