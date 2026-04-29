@@ -3991,11 +3991,12 @@ ${modelDescriptions}
           "Content-Type": "application/json",
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true"
+          "anthropic-dangerous-direct-browser-access": "true",
+          "anthropic-beta": "extended-cache-ttl-2025-04-11"
         };
         
         if (thinkingConfig?.enabled && model.includes("claude")) {
-          headers["anthropic-beta"] = "interleaved-thinking-2025-05-14";
+          headers["anthropic-beta"] += ",interleaved-thinking-2025-05-14";
           body.thinking = {
             type: "enabled",
             budget_tokens: thinkingConfig.budgetTokens || 10000
@@ -4426,6 +4427,7 @@ ${modelDescriptions}
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
           "anthropic-dangerous-direct-browser-access": "true",
+          "anthropic-beta": "extended-cache-ttl-2025-04-11"
         },
         body: JSON.stringify(reqBody),
       });
@@ -4670,6 +4672,7 @@ ${modelDescriptions}
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
           "anthropic-dangerous-direct-browser-access": "true",
+          "anthropic-beta": "extended-cache-ttl-2025-04-11"
         },
         body: JSON.stringify(reqBody),
       }, 60000); // 60秒连接超时
