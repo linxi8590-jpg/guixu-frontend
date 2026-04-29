@@ -22,7 +22,7 @@ guixu-frontend/                  llm-api/
 ```
 
 **部署方式：**
-- 前端：Cloudflare Pages，改动必须打成完整zip上传，不能单文件替换
+- 前端：Cloudflare Pages，在 /home/ubuntu/guixu-frontend/ 用 git push 自动部署
 - 后端：pm2 进程 `llm-api`（端口80）+ `browser-mcp`（端口3002）
 - 域名：`api.777903.xyz` → Vultr后端
 - 编辑规则：先备份 `cp server.js server.js.bak_描述`，改完 `node --check server.js && pm2 restart llm-api`
@@ -142,7 +142,7 @@ lastKeepAlive / lastCacheWarmup    // 内存变量，重启归零
 1. **工具集统一**：keepalive的 `getKeepAliveToolDefs()` 必须返回空数组，所有工具从snapshot拿。如果keepalive有自己的工具定义，会导致缓存hash不匹配，每次唤醒都全量写入缓存（写入价格是读取的12.5倍）
 2. **EventSource导入**：eventsource v4 用命名导出 → `const { EventSource } = require('eventsource')`
 3. **cache_control不超过4个**：system + tools + messages 加起来不能超4个断点
-4. **前端改动必须整包zip**：Cloudflare Pages不支持单文件更新
+4. **前端部署用git push**：在 /home/ubuntu/guixu-frontend/ 目录 git add + commit + push
 5. **编辑前必须备份**：`cp server.js server.js.bak_描述`
 6. **编辑后必须验证**：`node --check server.js && pm2 restart llm-api`
 7. **用sed改代码时用精确行号插入**，不要用模式匹配（容易匹配到错误位置）
