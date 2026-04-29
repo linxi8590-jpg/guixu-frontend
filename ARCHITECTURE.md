@@ -131,6 +131,7 @@ guixu-frontend/                  llm-api/
 
 ```
 MEMORY_TOKEN = 'wdsbkjgx1'        // 全局认证token
+BROWSER_MCP_TOKEN = 'browser_mcp_token_777'  // browser-mcp专用token，和MEMORY_TOKEN不同
 EMBEDDING_KEY = 'sk-proj-...'      // OpenAI embedding key
 dream_snapshot.json                // 最近一次聊天的完整请求体
 lastKeepAlive / lastCacheWarmup    // 内存变量，重启归零
@@ -141,6 +142,7 @@ lastKeepAlive / lastCacheWarmup    // 内存变量，重启归零
 ### 必须遵守
 1. **工具集统一**：keepalive的 `getKeepAliveToolDefs()` 必须返回空数组，所有工具从snapshot拿。如果keepalive有自己的工具定义，会导致缓存hash不匹配，每次唤醒都全量写入缓存（写入价格是读取的12.5倍）
 2. **EventSource导入**：eventsource v4 用命名导出 → `const { EventSource } = require('eventsource')`
+3. **browser-mcp token**：browser-mcp用的token是 `browser_mcp_token_777`，不是MEMORY_TOKEN。keepalive连浏览器MCP时必须用这个token
 3. **cache_control不超过4个**：system + tools + messages 加起来不能超4个断点
 4. **前端部署用git push**：在 /home/ubuntu/guixu-frontend/ 目录 git add + commit + push
 5. **编辑前必须备份**：`cp server.js server.js.bak_描述`
