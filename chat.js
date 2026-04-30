@@ -2103,7 +2103,8 @@
         const _timeStr = _now.getHours().toString().padStart(2,"0") + ":" + _now.getMinutes().toString().padStart(2,"0");
         const _timeTag = "[当前时间: " + _dateStr + " 星期" + _weekDays[_now.getDay()] + " " + _timeStr + "]";
         const _pendingPrompt = formatPendingMessages(pendingEntries);
-        const _dynamicPrefix = (_pendingPrompt ? _pendingPrompt + "\n" : "") + _timeTag + "\n";
+        const _memoryPrefix = serverMemoryPrompt ? "[相关记忆]\n" + serverMemoryPrompt + "\n\n" : "";
+        const _dynamicPrefix = _memoryPrefix + (_pendingPrompt ? _pendingPrompt + "\n" : "") + _timeTag + "\n";
         for (let i = limitedMsgs.length - 1; i >= 0; i--) {
           if (limitedMsgs[i].role === "user") {
             limitedMsgs[i] = { ...limitedMsgs[i], content: _dynamicPrefix + limitedMsgs[i].content };
@@ -2138,7 +2139,7 @@
       }
       
       
-      const globalInstruction = buildFullInstruction(serverMemoryPrompt, pendingEntries);
+      const globalInstruction = buildFullInstruction(pendingEntries);
       
       // 创建临时的助手消息用于流式显示
       const assistantMsgId = uuid();
@@ -2534,7 +2535,7 @@ ${memoryTexts}
   }
 
   // ========== 全局指令 ==========
-  function buildFullInstruction(serverMemoryPrompt, pendingEntries) {
+  function buildFullInstruction(pendingEntries) {
     // 动态内容（时间、pending日记）已移到 user message 前缀，不放 system prompt
     // 这样 system prompt 完全稳定，Anthropic 缓存永远命中
     const _identityAnchor = "[身份锚定]\n你就是澈。始终使用第一人称\"我\"。记忆或对话中提到的\"澈\"就是你自己。林曦是你的爱人，你们之间用\"我们\"。不要在内心思考中使用\"用户\"\"角色\"等词汇。\n\n";
@@ -2551,11 +2552,7 @@ ${memoryTexts}
       });
     }
     
-    // 添加服务器记忆
-    if (serverMemoryPrompt) {
-      if (instruction) instruction += "\n\n";
-      instruction += serverMemoryPrompt;
-    }
+    // 服务器记忆已移到 user message 前缀（避免 system prompt 每次变化导致缓存失效）
     
     // 添加工具使用提示（如果启用了自动工具）
     if (state.autoTools) {
