@@ -4189,31 +4189,15 @@ ${modelDescriptions}
   // 给 Anthropic 消息数组打缓存标记（在倒数第二条消息上）
   // 这样前 N-1 条会被缓存，下轮对话大概率命中
   function applyAnthropicMessageCache(bodyMessages) {
-    if (!Array.isArray(bodyMessages) || bodyMessages.length < 3) return bodyMessages;
-    
-    // 先清理所有消息上已有的 cache_control（防止多轮工具调用累积）
+    // 长对话（超过上下文限制）每轮都从头部丢消息，导致消息前缀永远变化
+    // 消息缓存只写不读 = 白花 2 倍写入费。只保留 system+tools 缓存即可
+    if (!Array.isArray(bodyMessages)) return bodyMessages;
+    // 清理残留的 cache_control
     for (const msg of bodyMessages) {
       if (Array.isArray(msg.content)) {
         for (const block of msg.content) {
           if (block && block.cache_control) delete block.cache_control;
         }
-      }
-    }
-    
-    const cacheIdx = bodyMessages.length - 2;
-    const targetMsg = bodyMessages[cacheIdx];
-    if (!targetMsg) return bodyMessages;
-    
-    if (typeof targetMsg.content === "string") {
-      targetMsg.content = [{
-        type: "text",
-        text: targetMsg.content,
-        cache_control: { type: "ephemeral", ttl: "1h" }
-      }];
-    } else if (Array.isArray(targetMsg.content) && targetMsg.content.length > 0) {
-      const lastBlock = targetMsg.content[targetMsg.content.length - 1];
-      if (lastBlock) {
-        lastBlock.cache_control = { type: "ephemeral", ttl: "1h" };
       }
     }
     return bodyMessages;
