@@ -2080,6 +2080,7 @@
       }
       
       const historyMsgs = state.messagesByChatId[chat.id].map((m) => ({
+        id: m.id,
         role: m.role,
         content: m.content,
         images: m.images || [],
