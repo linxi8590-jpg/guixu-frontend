@@ -2346,10 +2346,32 @@
     if (mode === "rounds") {
       const maxRounds = limit.maxRounds || 100;
       const maxMessages = maxRounds * 2;
+      
+      // 阶梯式截断：用锚点保持 msg[0] 稳定，让消息缓存能持续命中
+      const chat = typeof getActiveChat === 'function' ? getActiveChat(state) : null;
+      
+      // 检查是否有已存储的截断锚点（上次截断时第一条消息的ID）
+      let anchorId = chat && chat._contextAnchorId;
+      if (anchorId) {
+        const anchorIdx = messages.findIndex(m => m.id === anchorId);
+        if (anchorIdx >= 0) {
+          const result = messages.slice(anchorIdx);
+          if (result.length <= maxMessages) return result; // 还没超限，保持锚点不动
+          // 超限了，需要重新截断（下面处理）
+        }
+        // 锚点消息不存在了，重新计算
+      }
+      
+      // 没超限，不截断
       if (messages.length <= maxMessages) return messages;
-      // 阶梯式截断：超限时砍到一半，保持消息前缀稳定以命中 prompt cache
+      
+      // 超限：阶梯式截断到一半，并存储新锚点
       const keepMessages = Math.max(Math.floor(maxMessages / 2), 2);
-      return messages.slice(-keepMessages);
+      const sliced = messages.slice(-keepMessages);
+      if (chat && sliced.length > 0 && sliced[0].id) {
+        chat._contextAnchorId = sliced[0].id;
+      }
+      return sliced;
     }
     
     if (mode === "tokens") {
