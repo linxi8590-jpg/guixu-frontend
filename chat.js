@@ -2344,10 +2344,12 @@
     if (mode === "none") return messages;
     
     if (mode === "rounds") {
-      const maxRounds = limit.maxRounds || 50;
+      const maxRounds = limit.maxRounds || 100;
       const maxMessages = maxRounds * 2;
       if (messages.length <= maxMessages) return messages;
-      return messages.slice(-maxMessages);
+      // 阶梯式截断：超限时砍到一半，保持消息前缀稳定以命中 prompt cache
+      const keepMessages = Math.max(Math.floor(maxMessages / 2), 2);
+      return messages.slice(-keepMessages);
     }
     
     if (mode === "tokens") {
@@ -4189,15 +4191,26 @@ ${modelDescriptions}
   // 给 Anthropic 消息数组打缓存标记（在倒数第二条消息上）
   // 这样前 N-1 条会被缓存，下轮对话大概率命中
   function applyAnthropicMessageCache(bodyMessages) {
-    // 长对话（超过上下文限制）每轮都从头部丢消息，导致消息前缀永远变化
-    // 消息缓存只写不读 = 白花 2 倍写入费。只保留 system+tools 缓存即可
-    if (!Array.isArray(bodyMessages)) return bodyMessages;
-    // 清理残留的 cache_control
+    if (!Array.isArray(bodyMessages) || bodyMessages.length < 2) return bodyMessages;
+    // 先清理所有消息上残留的 cache_control
     for (const msg of bodyMessages) {
       if (Array.isArray(msg.content)) {
         for (const block of msg.content) {
           if (block && block.cache_control) delete block.cache_control;
         }
+      }
+    }
+    // 阶梯式截断下消息前缀稳定，在倒数第二条消息上打缓存断点
+    // 历史消息被缓存（cache_read），只有最新用户消息是 uncached
+    const target = bodyMessages[bodyMessages.length - 2];
+    if (target) {
+      if (Array.isArray(target.content) && target.content.length > 0) {
+        const lastBlock = target.content[target.content.length - 1];
+        if (lastBlock && typeof lastBlock === 'object') {
+          lastBlock.cache_control = { type: "ephemeral", ttl: "1h" };
+        }
+      } else if (typeof target.content === 'string') {
+        target.content = [{ type: "text", text: target.content, cache_control: { type: "ephemeral", ttl: "1h" } }];
       }
     }
     return bodyMessages;
