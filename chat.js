@@ -2348,28 +2348,29 @@
       const maxMessages = maxRounds * 2;
       
       // 阶梯式截断：用锚点保持 msg[0] 稳定，让消息缓存能持续命中
+      // 锚点存在函数对象上，不依赖 chat 对象（chat 可能被重建）
+      if (!applyContextLimit._anchors) applyContextLimit._anchors = {};
       const chat = typeof getActiveChat === 'function' ? getActiveChat(state) : null;
+      const chatId = chat && chat.id;
+      const anchorId = chatId ? applyContextLimit._anchors[chatId] : null;
       
-      // 检查是否有已存储的截断锚点（上次截断时第一条消息的ID）
-      let anchorId = chat && chat._contextAnchorId;
       if (anchorId) {
         const anchorIdx = messages.findIndex(m => m.id === anchorId);
         if (anchorIdx >= 0) {
           const result = messages.slice(anchorIdx);
-          if (result.length <= maxMessages) return result; // 还没超限，保持锚点不动
-          // 超限了，需要重新截断（下面处理）
+          if (result.length <= maxMessages) return result;
+          // 超限了，重新截断
         }
-        // 锚点消息不存在了，重新计算
       }
       
-      // 没超限，不截断
       if (messages.length <= maxMessages) return messages;
       
-      // 超限：阶梯式截断到一半，并存储新锚点
+      // 阶梯式截断到一半，存储新锚点
       const keepMessages = Math.max(Math.floor(maxMessages / 2), 2);
       const sliced = messages.slice(-keepMessages);
-      if (chat && sliced.length > 0 && sliced[0].id) {
-        chat._contextAnchorId = sliced[0].id;
+      if (chatId && sliced.length > 0 && sliced[0].id) {
+        applyContextLimit._anchors[chatId] = sliced[0].id;
+        console.log('[Context] 阶梯截断: ' + messages.length + ' → ' + sliced.length + ', 锚点: ' + sliced[0].id);
       }
       return sliced;
     }
