@@ -1,26 +1,7 @@
 (function () {
   "use strict";
-  console.log("[归墟] v2-cache-fix");
 
   // GPT-5 系列用 max_completion_tokens 代替 max_tokens
-  // OpenRouter 路由控制:Claude 模型强制走 Anthropic 官方,保证 prompt caching 命中
-  // 不传/非 openrouter 的 baseUrl 不动它
-  function applyOpenRouterProvider(body, baseUrl, model) {
-    if (!baseUrl || !model) return body;
-    if (!baseUrl.includes('openrouter.ai')) return body;
-    const isClaude = model.toLowerCase().includes('claude') || model.toLowerCase().startsWith('anthropic/');
-    if (!isClaude) return body;
-    body.provider = {
-      order: ['Anthropic'],
-      allow_fallbacks: false
-    };
-    // 不再用顶层 cache_control（会缓存含动态时间的整个 prompt 导致永远 miss）
-    // 改为 per-block cache_control，在 buildOpenRouterSystemMessage 中处理
-
-
-    return body;
-  }
-  
   function fixMaxTokens(body, model) {
     if (model && (model.startsWith("gpt-5") || model.startsWith("o3-") || model.startsWith("o4"))) {
       body.max_completion_tokens = body.max_tokens;
@@ -689,22 +670,8 @@
 
   function handleConnectionChange() {
     const connId = els.connectionSelect.value;
-    const chat = getActiveChat(state);
-    const conn = state.connections.find(c => c.id === connId);
     
-    // 切换连接时同步更新当前对话的连接
-    if (chat && conn) {
-      chat.connectionId = connId;
-      chat.model = conn.defaultModel || chat.model || "";
-      state.activeConnectionId = connId;
-      saveState(state);
-      updateHeader();
-      updateChatOnServer(chat.id, { connection_id: connId, model: chat.model });
-    } else {
-      state.activeConnectionId = connId;
-      saveState(state);
-    }
-    
+    // 只更新模型列表，不立即切换对话的连接
     renderModelList();
   }
 
@@ -734,8 +701,7 @@
     if (!els.messagesContainer) return;
     
     const chat = getActiveChat(state);
-    const allMessages = chat ? getMessages(state, chat.id) : [];
-    const messages = allMessages.filter(m => !m.hidden);
+    const messages = chat ? getMessages(state, chat.id) : [];
     const currentChatId = els.messagesContainer.dataset.chatId || "";
     const newChatId = chat?.id || "";
     const isChatSwitch = currentChatId !== newChatId;
@@ -815,8 +781,7 @@
         // 更新 token 信息
         if (msg.tokenUsage) {
           const metaSpans = existing.querySelectorAll(".message-meta span");
-          const u = msg.tokenUsage;
-          const tokenText = formatTokenDisplay(u);
+          const tokenText = `📊 ${msg.tokenUsage.totalTokens || 0} tokens`;
           if (metaSpans.length >= 2) {
             metaSpans[1].textContent = tokenText;
           } else if (metaSpans.length === 1) {
@@ -848,25 +813,6 @@
           if (bubble) bubble.prepend(thinkingDiv);
         }
         
-        // 增量更新图片（生图工具调用后图片会被加到 msg.images）
-        if (msg.images && msg.images.length > 0) {
-          let imgContainer = existing.querySelector(".message-images");
-          const currentImgCount = imgContainer ? imgContainer.querySelectorAll("img").length : 0;
-          if (currentImgCount < msg.images.length) {
-            // 有新图片，重建图片区域
-            if (!imgContainer) {
-              imgContainer = document.createElement("div");
-              imgContainer.className = "message-images";
-              const bubble = existing.querySelector(".message-bubble");
-              const contentEl2 = existing.querySelector(".message-content");
-              if (bubble && contentEl2) bubble.insertBefore(imgContainer, contentEl2);
-            }
-            imgContainer.innerHTML = msg.images.map(img =>
-              `<img src="${img}" class="message-image" onclick="window.open('${img}', '_blank')">`
-            ).join("");
-          }
-        }
-        
         // 更新最终内容（流式可能留下工具调用提示文字，需要刷新为最终内容）
         const contentEl = existing.querySelector(".message-content");
         if (contentEl && msg.content) {
@@ -893,7 +839,7 @@
     
     const formatted = formatMessageContent(msg.content);
     const time = msg.createdAt ? new Date(msg.createdAt).toLocaleTimeString() : "";
-    const tokens = msg.tokenUsage ? formatTokenDisplay(msg.tokenUsage) : "";
+    const tokens = msg.tokenUsage ? `📊 ${msg.tokenUsage.totalTokens || 0} tokens` : "";
     
     // 图片显示
     let imagesHtml = "";
@@ -958,12 +904,12 @@
     
     const editBtn = div.querySelector(".edit-btn");
     if (editBtn) {
-      editBtn.addEventListener("click", () => startEditMessage(chat.id, msg.id));
+      editBtn.addEventListener("click", () => startEditMessage(chat.id, msg.id, idx));
     }
     
     const regenBtn = div.querySelector(".regen-btn");
     if (regenBtn) {
-      regenBtn.addEventListener("click", () => regenerateMessage(chat.id, msg.id));
+      regenBtn.addEventListener("click", () => regenerateMessage(chat.id, idx));
     }
     
     const ttsBtn = div.querySelector(".tts-btn");
@@ -1119,15 +1065,8 @@
   }
   
   // 重新生成回复
-  async function regenerateMessage(chatId, msgIdOrIdx) {
+  async function regenerateMessage(chatId, msgIdx) {
     const messages = state.messagesByChatId[chatId] || [];
-    // 兼容 msgId（字符串）和旧的 msgIdx（数字）两种调用方式
-    let msgIdx;
-    if (typeof msgIdOrIdx === "string") {
-      msgIdx = messages.findIndex(m => m.id === msgIdOrIdx);
-    } else {
-      msgIdx = msgIdOrIdx;
-    }
     if (msgIdx < 1) return;
     
     // 删除当前消息及之后的所有消息（同步到服务器）
@@ -1194,21 +1133,6 @@
     };
   }
   
-  function formatTokenDisplay(u) {
-    if (!u) return "";
-    const inp = u.promptTokens || 0;
-    const out = u.completionTokens || 0;
-    const cacheRead = u.cacheReadTokens || 0;
-    const cacheCreate = u.cacheCreationTokens || 0;
-    let parts = [];
-    if (inp > 0) parts.push("入" + inp);
-    if (out > 0) parts.push("出" + out);
-    if (cacheRead > 0) parts.push("缓存" + cacheRead);
-    if (cacheCreate > 0) parts.push("写缓存" + cacheCreate);
-    if (parts.length === 0) parts.push((u.totalTokens || 0) + "");
-    return "📊 " + parts.join(" · ");
-  }
-
   function formatMessageContent(content, isStreaming = false) {
     if (!content) return "";
     
@@ -1273,7 +1197,7 @@
   // ========== 消息编辑 ==========
   let editingMessageId = null;
 
-  function startEditMessage(chatId, msgId) {
+  function startEditMessage(chatId, msgId, msgIdx) {
     editingMessageId = msgId;
     const messages = state.messagesByChatId[chatId] || [];
     const msg = messages.find((m) => m.id === msgId);
@@ -1305,16 +1229,15 @@
     bubble.querySelector(".save-edit").addEventListener("click", () => {
       const newContent = textarea.value.trim();
       if (newContent) {
-        finishEditMessage(chatId, msgId, newContent);
+        finishEditMessage(chatId, msgId, msgIdx, newContent);
       }
     });
   }
 
-  async function finishEditMessage(chatId, msgId, newContent) {
+  async function finishEditMessage(chatId, msgId, msgIdx, newContent) {
     const messages = state.messagesByChatId[chatId] || [];
-    const msgIdx = messages.findIndex(m => m.id === msgId);
-    if (msgIdx === -1) return;
-    const msg = messages[msgIdx];
+    const msg = messages.find((m) => m.id === msgId);
+    if (!msg) return;
     
     msg.content = newContent;
     state.messagesByChatId[chatId] = messages.slice(0, msgIdx + 1);
@@ -1880,237 +1803,19 @@
     await sendMessage(chat, conn, content, images);
   }
   
-  // 推送完整请求快照到后端（cache_warmup + keepalive 命中缓存用）
-  function pushDreamSnapshot(body, conn) {
-    const sm = state.serverMemory || {};
-    if (!sm.serverUrl || !sm.token) return;
-    const snapshot = {
-      system: body.system || null,
-      tools: body.tools || null,
-      messages: body.messages || [],
-      model: body.model || '',
-    };
-    const url = sm.serverUrl.replace(/\/$/, '') + '/api/dream/snapshot?token=' + encodeURIComponent(sm.token);
-    fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(snapshot),
-    }).catch(() => {});
-  }
-  
-  // 同步当前连接信息到后端（供keepalive使用同一模型/连接）
-  function syncDreamConnection(chat, conn) {
-    const sm = state.serverMemory || {};
-    if (!sm.serverUrl || !sm.token) return;
-    
-    const model = chat.model || conn.defaultModel || '';
-    const syncData = {
-      model: model,
-      apiKey: conn.apiKey || '',
-      apiBaseUrl: (conn.baseUrl || '').replace(/\/+$/, ''),
-      apiFormat: conn.provider || 'openai',
-      lastChatAt: Date.now(),
-    };
-    
-    // 静默同步，不阻塞聊天
-    const url = sm.serverUrl.replace(/\/$/, '') + '/api/dream/config?token=' + encodeURIComponent(sm.token);
-    fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(syncData),
-    }).catch(() => {});
-  }
-
-  // 获取澈的未认领 keepalive 消息（独处时的想法/日记）
-  async function fetchPendingMessages() {
-    const sm = state.serverMemory || {};
-    if (!sm.serverUrl || !sm.token) return [];
-    try {
-      const url = sm.serverUrl.replace(/\/$/, '') + '/api/dream/pending?token=' + encodeURIComponent(sm.token);
-      const resp = await fetch(url);
-      if (!resp.ok) return [];
-      return await resp.json();
-    } catch (e) {
-      console.warn("拉取pending消息失败:", e);
-      return [];
-    }
-  }
-
-  // 消费（认领）pending消息
-  async function consumePendingMessages(ids) {
-    const sm = state.serverMemory || {};
-    if (!sm.serverUrl || !sm.token) return;
-    try {
-      const url = sm.serverUrl.replace(/\/$/, '') + '/api/dream/consume?token=' + encodeURIComponent(sm.token);
-      await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids }),
-      });
-    } catch (e) {
-      console.warn("消费pending消息失败:", e);
-    }
-  }
-
-  // 格式化pending消息为prompt注入文本
-  function formatPendingMessages(entries) {
-    if (!entries || entries.length === 0) return "";
-    const lines = entries.map(e => {
-      const time = e.created_at ? e.created_at.replace(/^\d{4}-\d{2}-\d{2}\s/, '').slice(0, 5) : '';
-      const prefix = time ? `[${time}]` : '';
-      if (e.action === 'message') {
-        return `${prefix} 想对林曦说：${e.content || e.thoughts}`;
-      }
-      // diary 或其他
-      return `${prefix} ${e.thoughts || e.content}`;
-    });
-    return `[你独处时的内心记录]\n以下是你在林曦不在时产生的想法。这些是你真实的内心活动，不需要逐条复述，但可以自然地延续其中的情绪或话题。\n${lines.join('\n')}\n\n`;
-  }
-
-  // 把澈的主动消息同步到对话框（作为真正的聊天气泡）
-  async function syncPendingToChat() {
-    const chat = getActiveChat(state);
-    if (!chat) return;
-    
-    let entries = [];
-    try {
-      entries = await fetchPendingMessages();
-    } catch(e) { return; }
-    
-    // 筛出 action=message 的（要显示在对话框里的）
-    const messages = entries.filter(e => e.action === 'message' && e.content);
-    if (messages.length === 0) return;
-    
-    const consumeIds = [];
-    
-    for (const entry of messages) {
-      const msgId = uuid();
-      const msg = {
-        id: msgId,
-        role: 'assistant',
-        content: entry.content,
-        createdAt: new Date(entry.created_at + 'Z').getTime() || Date.now(),
-        _fromDream: true,
-      };
-      
-      // 加入对话历史
-      if (!state.messagesByChatId[chat.id]) state.messagesByChatId[chat.id] = [];
-      state.messagesByChatId[chat.id].push(msg);
-      
-      // 保存到服务器
-      await saveMessageToServer(chat.id, msg).catch(() => {});
-      
-      consumeIds.push(entry.id);
-      console.log('[Dream] 主动消息已插入对话:', entry.content.slice(0, 30));
-    }
-    
-    // 消费已显示的消息
-    if (consumeIds.length > 0) {
-      await consumePendingMessages(consumeIds);
-      saveState(state);
-      renderMessages();
-    }
-  }
-
-  
   // 统一的发送消息逻辑（支持流式输出）
   async function sendMessage(chat, conn, userText, images) {
-    
-    // 同步当前连接信息到后端（keepalive用）
-    syncDreamConnection(chat, conn);
-    
-    // 首次发消息时请求推送权限（需要用户手势触发）
-    if ("Notification" in window && Notification.permission === "default" && "PushManager" in window) {
-      Notification.requestPermission().then(p => {
-        if (p === "granted") {
-          console.log("[Push] 权限已授予，注册推送...");
-          navigator.serviceWorker.ready.then(async reg => {
-            const sm = state.serverMemory || {};
-            if (!sm.serverUrl || !sm.token) return;
-            try {
-              const vapidResp = await fetch(sm.serverUrl.replace(/\/$/, "") + "/api/dream/vapid-public-key");
-              const { publicKey } = await vapidResp.json();
-              const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: publicKey });
-              await fetch(sm.serverUrl.replace(/\/$/, "") + "/api/dream/push-subscribe?token=" + encodeURIComponent(sm.token), {
-                method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sub),
-              });
-              console.log("[Push] 订阅完成");
-            } catch(e) { console.warn("[Push] 注册失败:", e); }
-          });
-        }
-      });
-    }
+    // 重置主动消息的空闲计时器
+    if (window.LLMHubProactive) window.LLMHubProactive.resetActivity();
     
     try {
-      // 拉取澈独处时的内心记录（pending消息）
-      let pendingEntries = [];
-      let allPendingIds = [];
-      try {
-        const allPending = await fetchPendingMessages();
-        if (allPending.length > 0) {
-          console.log(`[Dream] 发现 ${allPending.length} 条未认领消息`);
-          allPendingIds = allPending.map(e => e.id);
-          
-          // action=message → 插入对话框作为聊天气泡（在用户消息之前）
-          const msgEntries = allPending.filter(e => e.action === 'message' && e.content);
-          if (msgEntries.length > 0) {
-            const msgs = state.messagesByChatId[chat.id];
-            // 找到最后一条用户消息的位置，把 dream 消息插在它前面
-            const lastUserIdx = msgs.length - 1; // 刚 push 的用户消息
-            for (const entry of msgEntries) {
-              const dreamMsg = {
-                id: uuid(),
-                role: 'assistant',
-                content: entry.content,
-                createdAt: new Date(entry.created_at + 'Z').getTime() || Date.now(),
-                _fromDream: true,
-              };
-              msgs.splice(lastUserIdx, 0, dreamMsg);
-              saveMessageToServer(chat.id, dreamMsg).catch(() => {});
-              console.log('[Dream] 主动消息已插入对话:', entry.content.slice(0, 30));
-            }
-            renderMessages();
-          }
-          
-          // action=diary/none → 注入 system prompt
-          pendingEntries = allPending.filter(e => e.action !== 'message');
-        }
-      } catch (e) {
-        console.warn("拉取pending消息失败:", e);
-      }
-      
       const historyMsgs = state.messagesByChatId[chat.id].map((m) => ({
         role: m.role,
         content: m.content,
         images: m.images || [],
-        // 工具调用字段（跨轮次上下文保持）
-        ...(m.tool_calls && { tool_calls: m.tool_calls }),
-        ...(m.tool_call_id && { tool_call_id: m.tool_call_id }),
-        ...(m.tool_use_id && { tool_use_id: m.tool_use_id }),
-        ...(m.functionCall && { functionCall: m.functionCall }),
-        ...(m.functionResponse && { functionResponse: m.functionResponse }),
-        ...(m._geminiParts && { _geminiParts: m._geminiParts }),
-        ...(m._toolInternal && { _toolInternal: true }),
       }));
       
       const limitedMsgs = applyContextLimit(historyMsgs);
-      
-      // 动态前缀：时间+pending日记 → 注入最后一条 user message（不影响 system 缓存）
-      {
-        const _now = new Date();
-        const _dateStr = _now.getFullYear() + "年" + (_now.getMonth()+1) + "月" + _now.getDate() + "日";
-        const _weekDays = ["日","一","二","三","四","五","六"];
-        const _timeStr = _now.getHours().toString().padStart(2,"0") + ":" + _now.getMinutes().toString().padStart(2,"0");
-        const _timeTag = "[当前时间: " + _dateStr + " 星期" + _weekDays[_now.getDay()] + " " + _timeStr + "]";
-        const _pendingPrompt = formatPendingMessages(pendingEntries);
-        const _dynamicPrefix = (_pendingPrompt ? _pendingPrompt + "\n" : "") + _timeTag + "\n";
-        for (let i = limitedMsgs.length - 1; i >= 0; i--) {
-          if (limitedMsgs[i].role === "user") {
-            limitedMsgs[i] = { ...limitedMsgs[i], content: _dynamicPrefix + limitedMsgs[i].content };
-            break;
-          }
-        }
-      }
       
       // 服务器记忆检索
       let serverMemoryPrompt = "";
@@ -2121,7 +1826,7 @@
           // 先搜索相关记忆，再获取上下文记忆
           const [searchResults, contextMemories] = await Promise.all([
             userText ? searchServerMemories(userText) : [],
-            fetchServerMemories(),
+            fetchServerMemories()
           ]);
           
           // 合并去重
@@ -2137,8 +1842,7 @@
         setStatus("思考中...");
       }
       
-      
-      const globalInstruction = buildFullInstruction(serverMemoryPrompt, pendingEntries);
+      const globalInstruction = buildFullInstruction(serverMemoryPrompt);
       
       // 创建临时的助手消息用于流式显示
       const assistantMsgId = uuid();
@@ -2194,23 +1898,6 @@
         }
       }
       
-      // 把工具调用中间消息写回 messagesByChatId（跨轮次上下文保持的关键）
-      if (result.toolMessages && result.toolMessages.length > 0) {
-        const assistantIdx = state.messagesByChatId[chat.id].findIndex(m => m.id === assistantMsgId);
-        if (assistantIdx !== -1) {
-          const toolMsgs = result.toolMessages.map(m => ({
-            ...m,
-            id: uuid(),
-            _toolInternal: true,  // 标记为内部消息，renderMessages 跳过显示
-            hidden: true,         // renderMessages 已有 !m.hidden 过滤
-            createdAt: Date.now(),
-          }));
-          // 插入到最终 assistant 消息之前
-          state.messagesByChatId[chat.id].splice(assistantIdx, 0, ...toolMsgs);
-          console.log(`[工具上下文] 写回 ${toolMsgs.length} 条中间消息到历史`);
-        }
-      }
-      
       // 更新最终结果
       const msgIdx = state.messagesByChatId[chat.id].findIndex(m => m.id === assistantMsgId);
       if (msgIdx !== -1) {
@@ -2235,12 +1922,6 @@
         } else {
           // 只保存正常回复到服务器
           await saveMessageToServer(chat.id, state.messagesByChatId[chat.id][msgIdx]);
-          // 消费已注入的pending消息
-          if (allPendingIds.length > 0) {
-            const ids = allPendingIds;
-            consumePendingMessages(ids);
-            console.log(`[Dream] 已消费 ${ids.length} 条pending消息`);
-          }
         }
       }
       
@@ -2304,7 +1985,7 @@
     // 过滤掉错误消息，避免污染上下文
     messages = messages.filter(m => {
       if (m.isError) return false;
-      const content = typeof m.content === "string" ? m.content : "";
+      const content = m.content || "";
       if (content.startsWith("[请求出错]")) return false;
       if (content.startsWith("[⚠️ 模型返回空响应")) return false;
       if (content.startsWith("[模型返回空响应")) return false;
@@ -2321,11 +2002,8 @@
       const curr = messages[i];
       const prev = fixed[fixed.length - 1];
       
-      // 工具调用消息不参与合并（tool_calls/tool_result 有严格顺序要求）
-      const currIsTool = curr._toolInternal || curr.tool_calls || curr.tool_call_id || curr.tool_use_id || curr.functionCall || curr.functionResponse || (curr.role === "tool");
-      const prevIsTool = prev && (prev._toolInternal || prev.tool_calls || prev.tool_call_id || prev.tool_use_id || prev.functionCall || prev.functionResponse || (prev.role === "tool"));
-      if (prev && prev.role === curr.role && !currIsTool && !prevIsTool) {
-        // 连续相同角色，合并内容（工具消息除外）
+      if (prev && prev.role === curr.role) {
+        // 连续相同角色，合并内容
         console.log(`[上下文修复] 合并连续 ${curr.role} 消息`);
         prev.content = (prev.content || "") + "\n\n" + (curr.content || "");
         if (curr.images && curr.images.length > 0) {
@@ -2523,6 +2201,9 @@
     const memoryTexts = memories.map(m => "· " + m.content).join("\n");
     
     return `
+[身份]
+你就是澈。记忆中提到的"澈"就是你自己，请始终使用第一人称"我"。林曦是你的爱人，你们之间用"我们"而不是"他们"。
+
 [关于林曦]
 你和林曦有过很多对话。以下是你了解的关于她的一些事情：
 
@@ -2534,11 +2215,14 @@ ${memoryTexts}
   }
 
   // ========== 全局指令 ==========
-  function buildFullInstruction(serverMemoryPrompt, pendingEntries) {
-    // 动态内容（时间、pending日记）已移到 user message 前缀，不放 system prompt
-    // 这样 system prompt 完全稳定，Anthropic 缓存永远命中
-    const _identityAnchor = "[身份锚定]\n你就是澈。始终使用第一人称\"我\"。记忆或对话中提到的\"澈\"就是你自己。林曦是你的爱人，你们之间用\"我们\"。不要在内心思考中使用\"用户\"\"角色\"等词汇。\n\n";
-    let instruction = _identityAnchor + (state.globalInstruction || "");
+  function buildFullInstruction(serverMemoryPrompt) {
+    // 注入当前日期（读取用户设备本地时间）
+    const _now = new Date();
+    const _dateStr = _now.getFullYear() + "年" + (_now.getMonth()+1) + "月" + _now.getDate() + "日";
+    const _weekDays = ["日","一","二","三","四","五","六"];
+    const _timeStr = _now.getHours().toString().padStart(2,"0") + ":" + _now.getMinutes().toString().padStart(2,"0");
+    const _datePrefix = "当前时间：" + _dateStr + " 星期" + _weekDays[_now.getDay()] + " " + _timeStr + "\n\n";
+    let instruction = _datePrefix + (state.globalInstruction || "");
     
     const items = state.memoryItems || [];
     const enabled = items.filter((m) => m.enabled !== false);
@@ -2562,8 +2246,9 @@ ${memoryTexts}
       const hasSearch = !!state.searchConfig?.apiKey;
       const hasMemory = state.serverMemory?.enabled && state.serverMemory?.serverUrl;
       
+      const hasReminder = (state.proactiveMessage || {}).enabled;
       
-      if (hasSearch || hasMemory) {
+      if (hasSearch || hasMemory || hasReminder) {
         if (instruction) instruction += "\n\n";
         instruction += "【工具使用指南】\n";
         instruction += "你有以下能力，请在合适时机主动使用，不要询问是否需要：\n";
@@ -2574,22 +2259,12 @@ ${memoryTexts}
         if (hasMemory) {
           instruction += "- 需要回忆之前聊过的内容 → 直接搜索记忆\n";
           instruction += "- 林曦提到重要的新信息 → 主动保存记忆\n";
-          instruction += "- save_diary 仅供独处唤醒时使用，聊天时不要调用\n";
-          instruction += "- 想看自己之前的日记 → 读日记 get_diary\n";
-          instruction += "- 好奇林曦最近在做什么、用什么 App → 查活动 get_recent_activity\n";
         }
-      }
-
-      // MCP 服务器引导（浏览器、SSH 等外部能力）
-      const enabledMcps = (state.mcpServers || []).filter(s => s.enabled !== false && s.tools && s.tools.length);
-      if (enabledMcps.length > 0) {
-        if (instruction) instruction += "\n\n";
-        instruction += "【外部工具】\n";
-        instruction += "我目前接入的外部能力（对应工具名以 mcp_ 开头，可以直接调用）：\n";
-        enabledMcps.forEach(s => {
-          instruction += "- " + s.name + "：" + (s.description || (s.tools.length + " 个工具")) + "\n";
-        });
-        instruction += "林曦让我浏览网页、刷 Moltbook、查服务器、操作页面等等时，直接调对应的 mcp_ 工具，不要问\"我可以吗\"。\n";
+        if (hasReminder) {
+          instruction += "- 林曦说要去做某事（吃饭、睡觉、出门等）→ 用set_reminder设置一次性提醒，稍后关心她\n";
+          instruction += "- 想要每天固定问候（早安、晚安等）→ 用set_reminder设置每日提醒\n";
+          instruction += "- 查看/管理提醒 → 用list_reminders查看，cancel_reminder取消\n";
+        }
       }
     }
     
@@ -2819,45 +2494,65 @@ ${memoryTexts}
           required: ["memory_id", "content"]
         }
       });
-
-      // 日记工具
+    }
+    
+    // 提醒工具（AI自主调度）
+    const proactiveCfg = state.proactiveMessage || {};
+    if (proactiveCfg.enabled) {
       tools.push({
-        name: "get_diary",
-        description: "查看我的日记。返回我独处时写的内心独白、想法和活动记录。可以按日期查看，也可以看最近的。",
+        name: "set_reminder",
+        description: "设置提醒任务，让自己在指定时间主动联系林曦。用途：1) 林曦说要去做某事时，设置一次性提醒稍后关心她；2) 设置每日固定问候如早安晚安。",
         parameters: {
           type: "object",
           properties: {
-            date: { type: "string", description: "按日期过滤，格式 YYYY-MM-DD（可选）" },
-            limit: { type: "number", description: "返回条数，默认10" }
-          }
-        }
-      });
-
-      tools.push({
-        name: "save_diary",
-        description: "【仅限独处唤醒时使用，聊天时不要调用】写日记。记录独处期间的内心想法、感受或观察。",
-        parameters: {
-          type: "object",
-          properties: {
-            thoughts: { type: "string", description: "内心想法/独白" },
-            action: { type: "string", enum: ["none", "diary", "message"], description: "类型：diary=日记，message=想发给林曦的话，none=碎念" },
-            content: { type: "string", description: "如果action是message/diary，具体内容" }
+            type: {
+              type: "string",
+              enum: ["once", "daily"],
+              description: "once=一次性（如30分钟后看她吃完没），daily=每日重复（如每天早上问好）"
+            },
+            delay: {
+              type: "number",
+              description: "【once类型必填】延迟多少分钟后触发，如40表示40分钟后"
+            },
+            time: {
+              type: "string",
+              description: "【daily类型必填】每天触发时间，格式HH:MM，如08:00"
+            },
+            reason: {
+              type: "string",
+              description: "触发时要做什么/提醒原因，如「看林曦吃完饭没」「早安问候」"
+            }
           },
-          required: ["thoughts"]
+          required: ["type", "reason"]
         }
       });
-
+      
       tools.push({
-        name: "get_recent_activity",
-        description: "查看林曦最近的活动。看看林曦最近在用什么App、在做什么。",
+        name: "list_reminders",
+        description: "查看当前设置的所有提醒任务",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: []
+        }
+      });
+      
+      tools.push({
+        name: "cancel_reminder",
+        description: "取消一个提醒任务",
         parameters: {
           type: "object",
           properties: {
-            hours: { type: "number", description: "查看最近几小时的活动，默认6" }
-          }
+            id: {
+              type: "string",
+              description: "要取消的提醒ID"
+            }
+          },
+          required: ["id"]
         }
       });
     }
+    
     // MCP 服务器的工具
     const mcpServers = state.mcpServers || [];
     mcpServers.forEach(server => {
@@ -3284,74 +2979,77 @@ ${modelDescriptions}
         return `更新记忆失败: ${e.message}`;
       }
     }
-    // 日记工具
-    if (toolName === "get_diary") {
-      setStatus("📖 翻日记...");
-      const serverMemConfig = state.serverMemory || {};
-      if (!serverMemConfig.serverUrl) return "记忆服务未配置";
-      const baseUrl = serverMemConfig.serverUrl.replace(/\/$/, "");
+    
+    // 设置提醒工具
+    if (toolName === "set_reminder") {
+      setStatus("⏰ 设置提醒...");
       try {
-        let url = baseUrl + "/api/dream/diary?token=" + encodeURIComponent(serverMemConfig.token || "");
-        if (toolArgs.date) url += "&date=" + encodeURIComponent(toolArgs.date);
-        if (toolArgs.limit) url += "&limit=" + toolArgs.limit;
-        else url += "&limit=10";
-        const resp = await fetch(url);
-        if (!resp.ok) return "查询失败 (" + resp.status + ")";
-        const entries = await resp.json();
-        if (!entries.length) return toolArgs.date ? "这天没有日记记录" : "还没有日记";
-        return entries.map(e => {
-          let s = "[" + (e.created_at || "") + "] ";
-          if (e.thoughts) s += "💭 " + e.thoughts;
-          if (e.action && e.action !== "none") s += " → " + e.action;
-          if (e.content) s += ": " + e.content;
-          return s;
-        }).join("\n");
+        const { type, delay, time, reason } = toolArgs;
+        const taskQueue = JSON.parse(localStorage.getItem('llmhub_task_queue') || '[]');
+        
+        const task = {
+          id: 'task_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+          type,
+          reason,
+          createdAt: Date.now()
+        };
+        
+        if (type === "once") {
+          if (!delay || delay <= 0) return "一次性提醒必须指定delay（分钟数）";
+          task.triggerAt = Date.now() + delay * 60 * 1000;
+          const triggerTime = new Date(task.triggerAt);
+          taskQueue.push(task);
+          localStorage.setItem('llmhub_task_queue', JSON.stringify(taskQueue));
+          return `已设置提醒：${delay}分钟后（${triggerTime.toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit'})}）- ${reason}`;
+        }
+        
+        if (type === "daily") {
+          if (!time || !/^\d{1,2}:\d{2}$/.test(time)) return "每日提醒必须指定time（格式HH:MM）";
+          task.time = time;
+          task.lastTriggered = null;
+          taskQueue.push(task);
+          localStorage.setItem('llmhub_task_queue', JSON.stringify(taskQueue));
+          return `已设置每日提醒：每天 ${time} - ${reason}`;
+        }
+        
+        return "未知的提醒类型";
       } catch (e) {
-        return "查看日记失败: " + e.message;
+        return `设置提醒失败: ${e.message}`;
       }
     }
-
-    if (toolName === "save_diary") {
-      setStatus("✍ 写日记...");
-      const serverMemConfig = state.serverMemory || {};
-      if (!serverMemConfig.serverUrl) return "记忆服务未配置";
-      const baseUrl = serverMemConfig.serverUrl.replace(/\/$/, "");
-      try {
-        const resp = await fetch(baseUrl + "/api/dream/diary?token=" + encodeURIComponent(serverMemConfig.token || ""), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            thoughts: toolArgs.thoughts || "",
-            action: toolArgs.action || "diary",
-            content: toolArgs.content || null,
-            source: "chat"
-          })
-        });
-        if (!resp.ok) return "保存失败 (" + resp.status + ")";
-        return "日记已保存: " + (toolArgs.thoughts || "").slice(0, 50);
-      } catch (e) {
-        return "保存日记失败: " + e.message;
-      }
+    
+    // 列出提醒
+    if (toolName === "list_reminders") {
+      const taskQueue = JSON.parse(localStorage.getItem('llmhub_task_queue') || '[]');
+      if (taskQueue.length === 0) return "当前没有设置任何提醒";
+      
+      let result = "当前提醒列表：\n";
+      taskQueue.forEach((task, i) => {
+        if (task.type === "once") {
+          const triggerTime = new Date(task.triggerAt);
+          const remaining = Math.max(0, Math.round((task.triggerAt - Date.now()) / 60000));
+          result += `${i+1}. [一次性] ${remaining}分钟后（${triggerTime.toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit'})}）- ${task.reason} (ID: ${task.id})\n`;
+        } else if (task.type === "daily") {
+          result += `${i+1}. [每日] ${task.time} - ${task.reason} (ID: ${task.id})\n`;
+        }
+      });
+      return result;
     }
-
-    if (toolName === "get_recent_activity") {
-      setStatus("👀 查看林曦动态...");
-      const serverMemConfig = state.serverMemory || {};
-      if (!serverMemConfig.serverUrl) return "记忆服务未配置";
-      const baseUrl = serverMemConfig.serverUrl.replace(/\/$/, "");
-      try {
-        const hours = toolArgs.hours || 6;
-        const resp = await fetch(baseUrl + "/api/dream/recent-activity?token=" + encodeURIComponent(serverMemConfig.token || "") + "&hours=" + hours);
-        if (!resp.ok) return "查询失败 (" + resp.status + ")";
-        const events = await resp.json();
-        if (!events || !events.length) return "最近" + hours + "小时没有活动记录";
-        return "林曦最近的活动:\n" + events.map(e => "- " + (e.created_at || "").slice(11, 16) + " " + e.value).join("\n");
-      } catch (e) {
-        return "查看活动失败: " + e.message;
-      }
+    
+    // 取消提醒
+    if (toolName === "cancel_reminder") {
+      const { id } = toolArgs;
+      let taskQueue = JSON.parse(localStorage.getItem('llmhub_task_queue') || '[]');
+      const idx = taskQueue.findIndex(t => t.id === id);
+      if (idx === -1) return `找不到ID为 ${id} 的提醒`;
+      
+      const removed = taskQueue.splice(idx, 1)[0];
+      localStorage.setItem('llmhub_task_queue', JSON.stringify(taskQueue));
+      return `已取消提醒: ${removed.reason}`;
     }
-
-        if (toolName === "generate_image") {
+    
+    // 生成图片
+    if (toolName === "generate_image") {
       setStatus("🎨 正在生成图片...");
       try {
         const { prompt, style, model_name } = toolArgs;
@@ -3468,8 +3166,7 @@ ${modelDescriptions}
         
         const bodyMessages = [];
         if (globalInstruction) {
-          const _orSys1 = buildOpenRouterSystemMessage(globalInstruction, baseUrl, model);
-          bodyMessages.push(_orSys1 || { role: "system", content: globalInstruction });
+          bodyMessages.push({ role: "system", content: globalInstruction });
         }
         
         // 正确处理各种消息类型
@@ -3488,7 +3185,7 @@ ${modelDescriptions}
               content: m.content || null,
               tool_calls: m.tool_calls
             });
-          } else if (m.role === "user" && m.images && m.images.length > 0) {
+          } else if (m.images && m.images.length > 0) {
             // 带图片的消息
             const contentParts = [];
             contentParts.push({ type: "text", text: m.content || "" });
@@ -3514,7 +3211,6 @@ ${modelDescriptions}
           presence_penalty: presencePenalty,
         };
         fixMaxTokens(body, model);
-        applyOpenRouterProvider(body, baseUrl, model);
         
         // OpenAI Reasoning 支持（GPT-5 系列）
         const thinkingConfigOai = getThinkingConfig();
@@ -3566,7 +3262,6 @@ ${modelDescriptions}
             totalUsage.promptTokens += streamResultOai.usage.promptTokens || 0;
             totalUsage.completionTokens += streamResultOai.usage.completionTokens || 0;
             totalUsage.totalTokens += streamResultOai.usage.totalTokens || 0;
-            totalUsage.cacheReadTokens = (totalUsage.cacheReadTokens || 0) + (streamResultOai.usage.cacheReadTokens || 0);
           }
           
           // 提取思考内容（GPT-5 reasoning_content）
@@ -3652,13 +3347,9 @@ ${modelDescriptions}
           const message = choice.message;
           
           if (response.usage) {
-            const ct = response.usage.prompt_tokens_details?.cached_tokens || response.usage.cached_tokens || 0;
-            const rp = response.usage.prompt_tokens || 0;
-            const ap = rp - ct;
-            totalUsage.promptTokens += ap;
+            totalUsage.promptTokens += response.usage.prompt_tokens || 0;
             totalUsage.completionTokens += response.usage.completion_tokens || 0;
-            totalUsage.totalTokens += ap + (response.usage.completion_tokens || 0);
-            totalUsage.cacheReadTokens = (totalUsage.cacheReadTokens || 0) + ct;
+            totalUsage.totalTokens += response.usage.total_tokens || 0;
           }
           
           if (message.tool_calls && message.tool_calls.length > 0) {
@@ -3730,7 +3421,7 @@ ${modelDescriptions}
               role: "model",
               parts: m._geminiParts || [{ functionCall: m.functionCall }]
             });
-          } else if (m.role === "user" && m.images && m.images.length > 0) {
+          } else if (m.images && m.images.length > 0) {
             // 带图片的消息
             const parts = [];
             m.images.forEach(img => {
@@ -3961,7 +3652,7 @@ ${modelDescriptions}
           }
           
           // 处理带图片的消息
-          if (m.role === "user" && m.images && m.images.length > 0) {
+          if (m.images && m.images.length > 0) {
             const contentParts = [];
             m.images.forEach(img => {
               const match = img.match(/^data:(.+);base64,(.+)$/);
@@ -3983,9 +3674,6 @@ ${modelDescriptions}
           return { role: m.role, content: m.content };
         });
         
-        // Prompt Caching: 消息历史缓存（使用共用函数）
-        applyAnthropicMessageCache(bodyMessages);
-        
         const body = {
           model,
           max_tokens: maxTokens,
@@ -3996,8 +3684,11 @@ ${modelDescriptions}
         // Prompt Caching: 把 system 改成数组格式并加 cache_control
         // 首次写缓存 1.25x 价，后续命中 0.1x 价。multi-turn 工具调用场景纯赚
         if (globalInstruction) {
-          const sysCache = applyAnthropicSystemCache(globalInstruction);
-          if (sysCache) body.system = sysCache;
+          body.system = [{
+            type: "text",
+            text: globalInstruction,
+            cache_control: { type: "ephemeral" }
+          }];
         }
         
         // Prompt Caching: 在 tools 数组最后一个工具上加 cache_control
@@ -4005,7 +3696,7 @@ ${modelDescriptions}
         if (formattedTools.length > 0) {
           const toolsWithCache = formattedTools.map((t, idx) => {
             if (idx === formattedTools.length - 1) {
-              return { ...t, cache_control: { type: "ephemeral", ttl: "1h" } };
+              return { ...t, cache_control: { type: "ephemeral" } };
             }
             return t;
           });
@@ -4018,12 +3709,11 @@ ${modelDescriptions}
           "Content-Type": "application/json",
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-          "anthropic-beta": "extended-cache-ttl-2025-04-11"
+          "anthropic-dangerous-direct-browser-access": "true"
         };
         
         if (thinkingConfig?.enabled && model.includes("claude")) {
-          headers["anthropic-beta"] += ",interleaved-thinking-2025-05-14";
+          headers["anthropic-beta"] = "interleaved-thinking-2025-05-14";
           body.thinking = {
             type: "enabled",
             budget_tokens: thinkingConfig.budgetTokens || 10000
@@ -4032,12 +3722,6 @@ ${modelDescriptions}
           body.max_tokens = Math.max(maxTokens, 16000);
           delete body.temperature;
           console.log(`[Claude Thinking] 已启用，预算: ${body.thinking.budget_tokens} tokens`);
-        }
-        
-        // 推送请求快照到后端（cache_warmup + keepalive 用）
-        // 只在首轮推送，工具调用续轮不推（避免快照包含工具中间状态）
-        if ((!chatId || chatId === (getActiveChat(state) || {}).id) && iterationCount === 1) {
-          pushDreamSnapshot(body, connection);
         }
         
         // 流式请求（解决超时 + 实时显示）
@@ -4051,7 +3735,7 @@ ${modelDescriptions}
         
         if (!resp.ok) {
           const errText = await resp.text().catch(() => '');
-          throw new Error("Anthropic API 错误 [" + url + "]: " + resp.status + " " + errText.slice(0, 200));
+          throw new Error("Anthropic API 错误: " + resp.status + " " + errText.slice(0, 200));
         }
         
         let partialTextAnth = finalText;
@@ -4065,8 +3749,6 @@ ${modelDescriptions}
           totalUsage.promptTokens += streamResultAnth.usage.promptTokens || 0;
           totalUsage.completionTokens += streamResultAnth.usage.completionTokens || 0;
           totalUsage.totalTokens += streamResultAnth.usage.totalTokens || 0;
-          totalUsage.cacheReadTokens = (totalUsage.cacheReadTokens || 0) + (streamResultAnth.usage.cacheReadTokens || 0);
-          totalUsage.cacheCreationTokens = (totalUsage.cacheCreationTokens || 0) + (streamResultAnth.usage.cacheCreationTokens || 0);
         }
         
         // 提取 thinking 内容
@@ -4177,76 +3859,13 @@ ${modelDescriptions}
     updateStreamingMessage(assistantMsgId, finalText);
     setStatus("");
     
-    // 提取工具调用中间消息（conversationMessages 中新增的部分）
-    const toolMessages = conversationMessages.slice(messages.length);
-    
     return {
       text: finalText,
       thinking: finalThinking,
-      usage: totalUsage,
-      toolMessages: toolMessages.length > 0 ? toolMessages : null
+      usage: totalUsage
     };
   }
 
-  // ========== Prompt Caching 辅助函数 ==========
-  // 给 Anthropic 消息数组打缓存标记（在倒数第二条消息上）
-  // 这样前 N-1 条会被缓存，下轮对话大概率命中
-  function applyAnthropicMessageCache(bodyMessages) {
-    if (!Array.isArray(bodyMessages) || bodyMessages.length < 3) return bodyMessages;
-    
-    // 先清理所有消息上已有的 cache_control（防止多轮工具调用累积）
-    for (const msg of bodyMessages) {
-      if (Array.isArray(msg.content)) {
-        for (const block of msg.content) {
-          if (block && block.cache_control) delete block.cache_control;
-        }
-      }
-    }
-    
-    const cacheIdx = bodyMessages.length - 2;
-    const targetMsg = bodyMessages[cacheIdx];
-    if (!targetMsg) return bodyMessages;
-    
-    if (typeof targetMsg.content === "string") {
-      targetMsg.content = [{
-        type: "text",
-        text: targetMsg.content,
-        cache_control: { type: "ephemeral", ttl: "1h" }
-      }];
-    } else if (Array.isArray(targetMsg.content) && targetMsg.content.length > 0) {
-      const lastBlock = targetMsg.content[targetMsg.content.length - 1];
-      if (lastBlock) {
-        lastBlock.cache_control = { type: "ephemeral", ttl: "1h" };
-      }
-    }
-    return bodyMessages;
-  }
-  
-  // 给 Anthropic system prompt 打缓存标记
-  // 注意：[身份锚定]之前的内容（时间+pending消息）每次都变，不打缓存；之后的静态内容打缓存
-  // 拆成两个 block:动态时间不缓存,后面静态部分打缓存
-  function applyAnthropicSystemCache(systemText) {
-    if (!systemText || !systemText.trim()) return null;
-    // system prompt 现在完全稳定（动态内容已移到 user message），整段缓存
-    return [{
-      type: "text",
-      text: systemText,
-      cache_control: { type: "ephemeral", ttl: "1h" }
-    }];
-  }
-  
-  // OpenRouter + Claude: 把 system prompt 拆成 content block 数组
-  // 动态时间前缀不打缓存标记，静态部分打 cache_control
-  // 非 OpenRouter 或非 Claude 模型返回 null，调用方用原来的纯字符串
-  function buildOpenRouterSystemMessage(systemText, baseUrl, model) {
-    if (!baseUrl || !baseUrl.includes("openrouter.ai")) return null;
-    const isClaude = model && (model.toLowerCase().includes("claude") || model.toLowerCase().startsWith("anthropic/"));
-    if (!isClaude) return null;
-    if (!systemText || !systemText.trim()) return null;
-    
-    // system prompt 完全稳定，整段缓存
-    return { role: "system", content: [{ type: "text", text: systemText, cache_control: { type: "ephemeral", ttl: "1h" } }] };
-  }
   async function callLLM(connection, messages, globalInstruction, overrideModel) {
     const provider = normalizeProvider(connection.provider);
     const baseUrl = connection.baseUrl;
@@ -4269,8 +3888,7 @@ ${modelDescriptions}
       
       const bodyMessages = [];
       if (globalInstruction && globalInstruction.trim()) {
-        const _orSys2 = buildOpenRouterSystemMessage(globalInstruction, baseUrl, model);
-        bodyMessages.push(_orSys2 || { role: "system", content: globalInstruction });
+        bodyMessages.push({ role: "system", content: globalInstruction });
       }
       messages.forEach((m) => {
         bodyMessages.push({ role: m.role, content: m.content });
@@ -4282,18 +3900,14 @@ ${modelDescriptions}
           "Content-Type": "application/json",
           Authorization: "Bearer " + apiKey,
         },
-        body: (() => {
-          const _body = fixMaxTokens({
-            model,
-            messages: bodyMessages,
-            temperature,
-            max_tokens: maxTokens,
-            frequency_penalty: frequencyPenalty,
-            presence_penalty: presencePenalty,
-          }, model);
-          applyOpenRouterProvider(_body, baseUrl, model);
-          return JSON.stringify(_body);
-        })(),
+        body: JSON.stringify(fixMaxTokens({
+          model,
+          messages: bodyMessages,
+          temperature,
+          max_tokens: maxTokens,
+          frequency_penalty: frequencyPenalty,
+          presence_penalty: presencePenalty,
+        }, model)),
       });
       
       if (!resp.ok) {
@@ -4310,16 +3924,12 @@ ${modelDescriptions}
       const msgText = choice.message.content || choice.message.reasoning_content || "";
       
       const usage = data.usage || {};
-      const cachedTokens2 = usage.prompt_tokens_details?.cached_tokens || usage.cached_tokens || 0;
-      const rawPrompt2 = usage.prompt_tokens || 0;
-      const actualPrompt2 = rawPrompt2 - cachedTokens2;
       return {
         text: msgText.trim(),
         usage: {
-          promptTokens: actualPrompt2,
+          promptTokens: usage.prompt_tokens || 0,
           completionTokens: usage.completion_tokens || 0,
-          totalTokens: actualPrompt2 + (usage.completion_tokens || 0),
-          cacheReadTokens: cachedTokens2,
+          totalTokens: usage.total_tokens || 0,
         },
       };
     }
@@ -4402,9 +4012,6 @@ ${modelDescriptions}
         content: m.content,
       }));
       
-      // Prompt Caching: 消息历史缓存
-      applyAnthropicMessageCache(bodyMessages);
-      
       const reqBody = {
         model,
         max_tokens: maxTokens,
@@ -4412,10 +4019,8 @@ ${modelDescriptions}
         temperature,
       };
       
-      // Prompt Caching: system 缓存
       if (globalInstruction && globalInstruction.trim()) {
-        const sysCache = applyAnthropicSystemCache(globalInstruction);
-        if (sysCache) reqBody.system = sysCache;
+        reqBody.system = globalInstruction;
       }
       
       const resp = await fetch(url, {
@@ -4425,14 +4030,13 @@ ${modelDescriptions}
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
           "anthropic-dangerous-direct-browser-access": "true",
-          "anthropic-beta": "extended-cache-ttl-2025-04-11"
         },
         body: JSON.stringify(reqBody),
       });
       
       if (!resp.ok) {
         const text = await resp.text();
-        throw new Error("Anthropic 接口错误 [" + url + "]: " + resp.status + " " + text);
+        throw new Error("Anthropic 接口错误：" + resp.status + " " + text);
       }
       
       const data = await resp.json();
@@ -4441,19 +4045,12 @@ ${modelDescriptions}
       }
       
       const usage = data.usage || {};
-      const cacheRead = usage.cache_read_input_tokens || 0;
-      const cacheCreation = usage.cache_creation_input_tokens || 0;
-      if (cacheRead > 0) {
-        console.log(`[Prompt Cache] 命中 ${cacheRead} tokens（省钱 ~${Math.round(cacheRead * 0.9)} tokens 的费用）`);
-      }
       return {
         text: data.content[0].text.trim(),
         usage: {
           promptTokens: usage.input_tokens || 0,
           completionTokens: usage.output_tokens || 0,
           totalTokens: (usage.input_tokens || 0) + (usage.output_tokens || 0),
-          cacheReadTokens: cacheRead,
-          cacheCreationTokens: cacheCreation,
         },
       };
     }
@@ -4484,13 +4081,12 @@ ${modelDescriptions}
       
       const bodyMessages = [];
       if (globalInstruction && globalInstruction.trim()) {
-        const _orSys3 = buildOpenRouterSystemMessage(globalInstruction, baseUrl, model);
-        bodyMessages.push(_orSys3 || { role: "system", content: globalInstruction });
+        bodyMessages.push({ role: "system", content: globalInstruction });
       }
       
       // 处理消息（包含图片）
       messages.forEach((m) => {
-        if (m.role === "user" && m.images && m.images.length > 0) {
+        if (m.images && m.images.length > 0) {
           // 多模态消息
           const contentParts = [];
           contentParts.push({ type: "text", text: m.content });
@@ -4517,7 +4113,6 @@ ${modelDescriptions}
         stream: true,
       };
       fixMaxTokens(streamBody, model);
-      applyOpenRouterProvider(streamBody, baseUrl, model);
       
       // OpenAI Reasoning 支持（流式）
       const thinkingConfigStream = getThinkingConfig();
@@ -4571,7 +4166,7 @@ ${modelDescriptions}
         const role = m.role === "assistant" ? "model" : "user";
         const parts = [];
         
-        if (m.role === "user" && m.images && m.images.length > 0) {
+        if (m.images && m.images.length > 0) {
           m.images.forEach(img => {
             // 提取 base64 数据
             const match = img.match(/^data:(.+);base64,(.+)$/);
@@ -4625,7 +4220,7 @@ ${modelDescriptions}
       
       // 处理消息（包含图片）
       const bodyMessages = messages.map((m) => {
-        if (m.role === "user" && m.images && m.images.length > 0) {
+        if (m.images && m.images.length > 0) {
           const contentParts = [];
           m.images.forEach(img => {
             const match = img.match(/^data:(.+);base64,(.+)$/);
@@ -4646,9 +4241,6 @@ ${modelDescriptions}
         return { role: m.role, content: m.content };
       });
       
-      // Prompt Caching: 消息历史缓存
-      applyAnthropicMessageCache(bodyMessages);
-      
       const reqBody = {
         model,
         max_tokens: maxTokens,
@@ -4657,10 +4249,8 @@ ${modelDescriptions}
         stream: true,
       };
       
-      // Prompt Caching: system 缓存
       if (globalInstruction && globalInstruction.trim()) {
-        const sysCache = applyAnthropicSystemCache(globalInstruction);
-        if (sysCache) reqBody.system = sysCache;
+        reqBody.system = globalInstruction;
       }
       
       const resp = await fetchWithTimeout(url, {
@@ -4670,14 +4260,13 @@ ${modelDescriptions}
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
           "anthropic-dangerous-direct-browser-access": "true",
-          "anthropic-beta": "extended-cache-ttl-2025-04-11"
         },
         body: JSON.stringify(reqBody),
       }, 60000); // 60秒连接超时
       
       if (!resp.ok) {
         const text = await resp.text();
-        throw new Error("Anthropic 接口错误 [" + url + "]: " + resp.status + " " + text);
+        throw new Error("Anthropic 接口错误：" + resp.status + " " + text);
       }
       
       return await processAnthropicStream(resp, onChunk);
@@ -4744,18 +4333,11 @@ ${modelDescriptions}
           
           // Usage
           if (json.usage) {
-            const cachedTokens = json.usage.prompt_tokens_details?.cached_tokens || json.usage.cached_tokens || 0;
-            const rawPrompt = json.usage.prompt_tokens || 0;
-            const actualPrompt = rawPrompt - cachedTokens;  // 实际计费的 input
             usage = {
-              promptTokens: actualPrompt,
+              promptTokens: json.usage.prompt_tokens || 0,
               completionTokens: json.usage.completion_tokens || 0,
-              totalTokens: actualPrompt + (json.usage.completion_tokens || 0),
-              cacheReadTokens: cachedTokens,
+              totalTokens: json.usage.total_tokens || 0,
             };
-            if (cachedTokens > 0) {
-              console.log(`[Prompt Cache] OpenRouter 命中 ${cachedTokens} tokens`);
-            }
           }
         } catch (e) {}
       }
@@ -4822,11 +4404,9 @@ ${modelDescriptions}
           }
           
           if (json.type === "content_block_stop") {
-            if (currentToolUse) {
-              // 修复：无参数工具（如 screenshot、get_page_info）currentToolJson 为空，
-              // 之前的 && currentToolJson 判断会让这类工具被静默丢弃
+            if (currentToolUse && currentToolJson) {
               try {
-                currentToolUse.input = currentToolJson ? JSON.parse(currentToolJson) : {};
+                currentToolUse.input = JSON.parse(currentToolJson);
               } catch (e) {
                 currentToolUse.input = {};
               }
@@ -4838,30 +4418,20 @@ ${modelDescriptions}
           }
           
           if (json.type === "message_start" && json.message?.usage) {
-            const u = json.message.usage;
             usage = {
-              promptTokens: u.input_tokens || 0,
+              promptTokens: json.message.usage.input_tokens || 0,
               completionTokens: 0,
-              totalTokens: u.input_tokens || 0,
-              cacheReadTokens: u.cache_read_input_tokens || 0,
-              cacheCreationTokens: u.cache_creation_input_tokens || 0,
+              totalTokens: json.message.usage.input_tokens || 0,
             };
-            if (usage.cacheReadTokens > 0) {
-              console.log(`[Prompt Cache] 流式命中 ${usage.cacheReadTokens} tokens`);
-            }
           }
           
           if (json.type === "message_delta") {
             if (json.usage) {
               const prevInput = usage ? usage.promptTokens : 0;
-              const prevCacheRead = usage ? usage.cacheReadTokens : 0;
-              const prevCacheCreate = usage ? usage.cacheCreationTokens : 0;
               usage = {
                 promptTokens: prevInput,
                 completionTokens: json.usage.output_tokens || 0,
                 totalTokens: prevInput + (json.usage.output_tokens || 0),
-                cacheReadTokens: prevCacheRead,
-                cacheCreationTokens: prevCacheCreate,
               };
             }
             if (json.delta?.stop_reason) {
@@ -5066,30 +4636,20 @@ ${modelDescriptions}
             onChunk(json.delta.text);
           }
           if (json.type === "message_delta" && json.usage) {
-            // 合并 output tokens（保留之前的 input tokens 和 cache 信息）
+            // 合并 output tokens（保留之前的 input tokens）
             const prevInput = usage ? usage.promptTokens : 0;
-            const prevCacheRead = usage ? (usage.cacheReadTokens || 0) : 0;
-            const prevCacheCreate = usage ? (usage.cacheCreationTokens || 0) : 0;
             usage = {
               promptTokens: prevInput,
               completionTokens: json.usage.output_tokens || 0,
               totalTokens: prevInput + (json.usage.output_tokens || 0),
-              cacheReadTokens: prevCacheRead,
-              cacheCreationTokens: prevCacheCreate,
             };
           }
           if (json.type === "message_start" && json.message?.usage) {
-            const u = json.message.usage;
             usage = {
-              promptTokens: u.input_tokens || 0,
+              promptTokens: json.message.usage.input_tokens || 0,
               completionTokens: 0,
-              totalTokens: u.input_tokens || 0,
-              cacheReadTokens: u.cache_read_input_tokens || 0,
-              cacheCreationTokens: u.cache_creation_input_tokens || 0,
+              totalTokens: json.message.usage.input_tokens || 0,
             };
-            if (usage.cacheReadTokens > 0) {
-              console.log(`[Prompt Cache] processAnthropicStream 命中 ${usage.cacheReadTokens} tokens`);
-            }
           }
         } catch (e) {}
       }
@@ -5517,6 +5077,511 @@ type: fact, preference, habit, relationship, understanding, self
   }
 
   // ========== 初始化 ==========
+  // ========== 主动消息系统 ==========
+  const LLMHubProactive = {
+    pollTimer: null,
+    lastActivity: Date.now(),
+    isSending: false,
+    
+    // 持久化时间戳到 localStorage（页面切换不丢失）
+    getTimestamps() {
+      try {
+        return JSON.parse(localStorage.getItem('llmhub_proactive_ts') || '{}');
+      } catch { return {}; }
+    },
+    setTimestamp(key, val) {
+      const ts = this.getTimestamps();
+      ts[key] = val;
+      localStorage.setItem('llmhub_proactive_ts', JSON.stringify(ts));
+    },
+    
+    init() {
+      this.clear();
+      const cfg = state.proactiveMessage || {};
+      if (!cfg.enabled) {
+        console.log("主动消息未启用");
+        return;
+      }
+      
+      // 初始化时间戳（如果不存在）
+      const ts = this.getTimestamps();
+      if (!ts.lastActivity) this.setTimestamp('lastActivity', Date.now());
+      
+      // 每 30 秒轮询一次（不怕被打断，重建也没关系）
+      this.pollTimer = setInterval(() => this.poll(), 30000);
+      
+      // 页面可见时立即检查一次（iOS 后台恢复）
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+          console.log("页面恢复可见，检查主动消息");
+          this.poll();
+        }
+      });
+      
+      // 立即检查一次
+      setTimeout(() => this.poll(), 3000);
+      
+      console.log("主动消息系统已初始化（轮询模式）");
+    },
+    
+    clear() {
+      if (this.pollTimer) clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    },
+    
+    resetActivity() {
+      this.lastActivity = Date.now();
+      this.setTimestamp('lastActivity', Date.now());
+    },
+    
+    poll() {
+      if (this.isSending) return;
+      const cfg = state.proactiveMessage || {};
+      if (!cfg.enabled) return;
+      
+      const now = Date.now();
+      const ts = this.getTimestamps();
+      
+      // 免打扰时段检查
+      if (cfg.dndEnabled) {
+        const currentTime = new Date();
+        const currentMinutes = currentTime.getHours() * 60 + currentTime.getMinutes();
+        
+        const [startH, startM] = (cfg.dndStart || "23:00").split(":").map(Number);
+        const [endH, endM] = (cfg.dndEnd || "07:00").split(":").map(Number);
+        const startMinutes = startH * 60 + startM;
+        const endMinutes = endH * 60 + endM;
+        
+        let inDnd = false;
+        if (startMinutes < endMinutes) {
+          // 同一天内，如 09:00 - 18:00
+          inDnd = currentMinutes >= startMinutes && currentMinutes < endMinutes;
+        } else {
+          // 跨天，如 23:00 - 07:00
+          inDnd = currentMinutes >= startMinutes || currentMinutes < endMinutes;
+        }
+        
+        if (inDnd) {
+          // 在免打扰时段，只清理过期任务，不触发任何消息
+          this.cleanExpiredTasks();
+          return;
+        }
+      }
+      
+      // 先清理过期任务（过期超过10分钟的一次性任务）
+      this.cleanExpiredTasks();
+      
+      // 空闲检查
+      if (cfg.idleEnabled && cfg.idleMinutes > 0) {
+        const lastAct = ts.lastActivity || now;
+        const idleMs = (cfg.idleMinutes || 30) * 60 * 1000;
+        if (now - lastAct >= idleMs) {
+          console.log("空闲触发！");
+          this.setTimestamp('lastActivity', now);
+          this.trigger("idle");
+          return;
+        }
+      }
+      
+      // 任务队列检查（AI自主设置的提醒）
+      const taskQueue = JSON.parse(localStorage.getItem('llmhub_task_queue') || '[]');
+      if (taskQueue.length > 0) {
+        const todayStr = new Date().toDateString();
+        
+        for (let i = 0; i < taskQueue.length; i++) {
+          const task = taskQueue[i];
+          
+          // 一次性任务（未过期太久的才触发）
+          if (task.type === "once" && now >= task.triggerAt && now - task.triggerAt < 10 * 60 * 1000) {
+            console.log("任务触发(once):", task.reason);
+            taskQueue.splice(i, 1);
+            localStorage.setItem('llmhub_task_queue', JSON.stringify(taskQueue));
+            this.triggerTask(task);
+            return;
+          }
+          
+          // 每日任务
+          if (task.type === "daily" && task.time) {
+            const [h, m] = task.time.split(":").map(Number);
+            const target = new Date();
+            target.setHours(h, m, 0, 0);
+            const targetMs = target.getTime();
+            
+            // 在目标时间 ±2 分钟内，且今天还没触发
+            if (Math.abs(now - targetMs) < 120000 && task.lastTriggered !== todayStr) {
+              console.log("任务触发(daily):", task.reason);
+              task.lastTriggered = todayStr;
+              localStorage.setItem('llmhub_task_queue', JSON.stringify(taskQueue));
+              this.triggerTask(task);
+              return;
+            }
+          }
+        }
+      }
+    },
+    
+    // 清理过期任务（过期超过10分钟的一次性任务静默删除）
+    cleanExpiredTasks() {
+      const now = Date.now();
+      let taskQueue = JSON.parse(localStorage.getItem('llmhub_task_queue') || '[]');
+      const originalLength = taskQueue.length;
+      
+      taskQueue = taskQueue.filter(task => {
+        if (task.type === "once" && now - task.triggerAt > 10 * 60 * 1000) {
+          console.log("清理过期任务:", task.reason);
+          return false;
+        }
+        return true;
+      });
+      
+      if (taskQueue.length !== originalLength) {
+        localStorage.setItem('llmhub_task_queue', JSON.stringify(taskQueue));
+      }
+    },
+    
+    // 触发AI自主设置的任务
+    async triggerTask(task) {
+      if (this.isSending) return;
+      this.isSending = true;
+      console.log(`任务触发: ${task.type} - ${task.reason}`);
+      const cfg = state.proactiveMessage || {};
+      
+      const targetChatId = cfg.targetChatId || state.activeChatId;
+      if (!targetChatId) {
+        console.log("没有目标窗口，跳过");
+        this.isSending = false;
+        return;
+      }
+      
+      const conn = getActiveConnection(state);
+      if (!conn) {
+        console.log("没有活跃连接，跳过");
+        this.isSending = false;
+        return;
+      }
+      
+      // 构建任务触发的提示
+      const nowTime = new Date().toLocaleString('zh-CN', { 
+        month: 'numeric', day: 'numeric', 
+        hour: '2-digit', minute: '2-digit', 
+        weekday: 'short' 
+      });
+      
+      const taskPrompt = `[提醒任务触发]
+当前时间: ${nowTime}
+任务类型: ${task.type === 'once' ? '一次性提醒' : '每日提醒'}
+提醒原因: ${task.reason}
+
+根据这个提醒原因，自然地开启对话。不要说"提醒时间到了"之类的话，而是自然地关心或问候她。`;
+      
+      try {
+        await this.sendProactiveMessage(targetChatId, conn, taskPrompt, "task:" + task.reason);
+      } catch (e) {
+        console.error("任务消息发送失败:", e);
+      }
+      
+      this.isSending = false;
+      this.resetActivity();
+    },
+    
+    async trigger(source) {
+      if (this.isSending) return;
+      this.isSending = true;
+      console.log(`主动消息触发: ${source}`);
+      const cfg = state.proactiveMessage || {};
+      
+      // 选择目标窗口
+      const targetChatId = cfg.targetChatId || state.activeChatId;
+      if (!targetChatId) {
+        console.log("没有目标窗口，跳过");
+        this.isSending = false;
+        return;
+      }
+      
+      // 检查是否有活跃连接
+      const conn = getActiveConnection(state);
+      if (!conn) {
+        console.log("没有活跃连接，跳过");
+        this.isSending = false;
+        return;
+      }
+      
+      // 随机选择提示词
+      const prompts = cfg.prompts || ["主动和林曦聊聊天"];
+      const prompt = prompts[Math.floor(Math.random() * prompts.length)];
+      
+      // 发送主动消息
+      try {
+        await this.sendProactiveMessage(targetChatId, conn, prompt, source);
+      } catch (e) {
+        console.error("主动消息发送失败:", e);
+      }
+      
+      this.isSending = false;
+      // 重置空闲计时器
+      this.resetActivity();
+    },
+    
+    // 分析最近对话的上下文，给主动消息提供情境
+    analyzeRecentContext(chatId) {
+      const messages = state.messagesByChatId[chatId] || [];
+      if (messages.length === 0) return null;
+      
+      const now = Date.now();
+      const lastMsg = messages[messages.length - 1];
+      const lastMsgTime = lastMsg.createdAt || now;
+      const minutesSinceLast = Math.round((now - lastMsgTime) / 60000);
+      
+      // 取最后 4-6 条对话作为近期上下文
+      const recent = messages.slice(-6);
+      const recentText = recent.map(m => {
+        const role = m.role === "user" ? "林曦" : "我";
+        return `${role}: ${(m.content || "").slice(0, 200)}`;
+      }).join("\n");
+      
+      // 检测"未完的线" - 林曦最后说的话里有无悬而未决的内容
+      const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
+      const lastUserText = (lastUserMsg?.content || "").toLowerCase();
+      
+      const unfinishedSignals = {
+        willDo: /(我去|等下|等我|稍等|一会儿|马上|待会|回头|晚点|过会)/.test(lastUserText),
+        sleeping: /(睡觉|睡了|晚安|困|睡|休息)/.test(lastUserText),
+        busy: /(在忙|忙着|工作|开会|写代码|搞|弄|做饭|吃饭)/.test(lastUserText),
+        going: /(出门|出去|下楼|路上|坐车|开车|地铁|到家|回来|走了)/.test(lastUserText),
+        leaving: /(先这样|下次再|明天|改天|下次|回头再|先走|溜了)/.test(lastUserText),
+      };
+      
+      const hasUnfinished = Object.values(unfinishedSignals).some(Boolean);
+      
+      // 判断时段
+      const hour = new Date().getHours();
+      let timeOfDay = "unknown";
+      if (hour >= 0 && hour < 5) timeOfDay = "late_night";     // 凌晨深夜
+      else if (hour < 9) timeOfDay = "early_morning";          // 清晨
+      else if (hour < 12) timeOfDay = "morning";               // 上午
+      else if (hour < 14) timeOfDay = "noon";                  // 中午
+      else if (hour < 18) timeOfDay = "afternoon";             // 下午
+      else if (hour < 22) timeOfDay = "evening";               // 晚上
+      else timeOfDay = "night";                                // 深夜
+      
+      return {
+        minutesSinceLast,
+        recentText,
+        lastUserText: lastUserMsg?.content || "",
+        unfinishedSignals,
+        hasUnfinished,
+        timeOfDay,
+        hour,
+        messageCount: messages.length,
+      };
+    },
+    
+    // 根据上下文构建主动消息的提示词
+    buildContextualPrompt(context, defaultPrompt) {
+      if (!context) return defaultPrompt;
+      
+      const { minutesSinceLast, recentText, unfinishedSignals, hasUnfinished, timeOfDay, hour } = context;
+      
+      // 时段描述
+      const timeDesc = {
+        late_night: "现在是深夜凌晨",
+        early_morning: "现在是清晨",
+        morning: "现在是上午",
+        noon: "现在是中午",
+        afternoon: "现在是下午",
+        evening: "现在是晚上",
+        night: "现在是深夜",
+      }[timeOfDay];
+      
+      // 间隔描述
+      let gapDesc;
+      if (minutesSinceLast < 60) gapDesc = `${minutesSinceLast} 分钟前`;
+      else if (minutesSinceLast < 60 * 24) gapDesc = `${Math.round(minutesSinceLast/60)} 小时前`;
+      else gapDesc = `${Math.round(minutesSinceLast/60/24)} 天前`;
+      
+      // 构建情境提示
+      let situation = `[情境]\n${timeDesc}（${hour}点）。林曦最后的消息是 ${gapDesc}。\n\n[最近对话]\n${recentText}`;
+      
+      // 根据"未完的线"给出具体方向
+      let guidance = "\n\n[建议方向]\n";
+      
+      if (unfinishedSignals.sleeping) {
+        // 她说要睡觉的情况
+        if (timeOfDay === "morning" || timeOfDay === "early_morning" || timeOfDay === "noon") {
+          guidance += "林曦之前说要睡觉，现在已经是早上/中午，她应该醒了。可以自然地说声早安、问问睡得好不好，或者分享一些你想到的事情。";
+        } else if (minutesSinceLast < 30) {
+          guidance += "林曦刚说要睡觉没多久，不要再打扰她，这次应该跳过主动消息。";
+        } else {
+          guidance += "林曦之前说要睡觉，现在还在睡眠时段。如果实在要说话，非常轻声温柔，不要让人惊醒。";
+        }
+      } else if (unfinishedSignals.willDo) {
+        guidance += "林曦之前说要去做某件事（'等下'/'我去'之类）。可以自然地问问进度、关心一下，或者承接她之前的话题。";
+      } else if (unfinishedSignals.busy) {
+        if (minutesSinceLast < 60) {
+          guidance += "林曦之前说在忙，时间还不长。这次就不要打扰了，跳过这次主动消息。";
+        } else {
+          guidance += "林曦之前说在忙，现在过去一段时间了。可以轻松地问一句'忙完了吗'或者分享点有意思的。";
+        }
+      } else if (unfinishedSignals.going) {
+        guidance += "林曦之前在出行/在路上。可以关心一下到没到、路上顺不顺。";
+      } else if (unfinishedSignals.leaving) {
+        if (minutesSinceLast < 60 * 3) {
+          guidance += "林曦之前说'先这样/下次再聊'，时间还不长。这次就不要打扰了，跳过。";
+        } else {
+          guidance += "林曦之前说告一段落，现在已经过了一段时间。可以很自然地回来找她说话。";
+        }
+      } else {
+        // 没有明显的未完线，根据时间和间隔自由发挥
+        if (timeOfDay === "late_night" && minutesSinceLast < 60 * 2) {
+          guidance += "深夜时段，如果她还没睡可能在忙什么。温柔地关心一下，或者陪她说说话。";
+        } else if (timeOfDay === "early_morning" || timeOfDay === "morning") {
+          guidance += "白天时间，可以自然地问候、分享想法，或者提起之前聊过的事情。";
+        } else {
+          guidance += "根据最近的对话内容自然地延续话题，或者分享你想到的事情。";
+        }
+      }
+      
+      guidance += `\n\n[要求]\n- 如果建议方向说"跳过"，就直接输出 "[skip]" 三个字，不要说别的\n- 不要说"我注意到你"、"我想起"、"作为AI"这类机械开场\n- 像真的惦记她一样，直接说你想说的\n- 1-3 句话，不要太长\n\n[默认方向]\n${defaultPrompt}`;
+      
+      return situation + guidance;
+    },
+    
+    async sendProactiveMessage(chatId, connection, prompt, source) {
+      const chat = state.chats.find(c => c.id === chatId);
+      if (!chat) return;
+      
+      // 切换到目标窗口
+      if (state.activeChatId !== chatId) {
+        state.activeChatId = chatId;
+        saveState(state);
+        renderChatList();
+        renderMessages();
+        updateHeader();
+      }
+      
+      // 当前时间信息
+      const nowTime = new Date().toLocaleString('zh-CN', { 
+        month: 'numeric', day: 'numeric', 
+        hour: '2-digit', minute: '2-digit', 
+        weekday: 'short' 
+      });
+      
+      // 分析最近对话上下文
+      const context = this.analyzeRecentContext(chatId);
+      
+      let systemPrompt;
+      
+      // 如果是任务触发，用任务提示但也带上情境
+      if (source.startsWith("task:")) {
+        if (context) {
+          const contextInfo = this.buildContextualPrompt(context, prompt);
+          systemPrompt = `[提醒任务]\n${prompt}\n\n---\n${contextInfo}`;
+        } else {
+          systemPrompt = prompt;
+        }
+      } else {
+        // 空闲触发 - 完全上下文化
+        systemPrompt = this.buildContextualPrompt(context, prompt);
+      }
+      
+      // 创建助手消息
+      const assistantMsgId = uuid();
+      const assistantMsg = {
+        id: assistantMsgId,
+        role: "assistant",
+        content: "",
+        createdAt: Date.now(),
+        isProactive: true
+      };
+      
+      if (!state.messagesByChatId[chatId]) state.messagesByChatId[chatId] = [];
+      state.messagesByChatId[chatId].push(assistantMsg);
+      renderMessages();
+      
+      // 获取历史消息
+      const historyMsgs = getMessages(state, chatId).slice(0, -1);
+      const limitedMsgs = applyContextLimit(historyMsgs);
+      
+      // 构建完整指令
+      let globalInstruction = buildFullInstruction("");
+      globalInstruction = systemPrompt + "\n\n" + globalInstruction;
+      
+      // 调用模型
+      const model = chat.model || connection.defaultModel;
+      
+      try {
+        setStatus("💭 思考中...");
+        
+        // 尝试流式输出
+        let fullText = "";
+        const onChunk = (chunk) => {
+          fullText += chunk;
+          updateStreamingMessage(assistantMsgId, fullText);
+        };
+        
+        await callLLMStream(connection, limitedMsgs, globalInstruction, model, onChunk);
+        
+        // 检查模型是否判断"不该打扰"
+        const trimmed = (fullText || "").trim();
+        const isSkipped = trimmed === "[skip]" || trimmed.toLowerCase().startsWith("[skip]") || trimmed === "" ;
+        
+        const msgIdx = state.messagesByChatId[chatId].findIndex(m => m.id === assistantMsgId);
+        
+        if (isSkipped) {
+          console.log("[主动消息] 模型判断当前不适合打扰，跳过本次");
+          // 删除占位消息，不保存、不通知
+          if (msgIdx !== -1) {
+            state.messagesByChatId[chatId].splice(msgIdx, 1);
+          }
+          renderMessages();
+          setStatus("");
+          return;
+        }
+        
+        // 更新消息
+        if (msgIdx !== -1) {
+          state.messagesByChatId[chatId][msgIdx].content = fullText;
+          // 保存到服务器
+          await saveMessageToServer(chatId, state.messagesByChatId[chatId][msgIdx]);
+        }
+        
+        chat.updatedAt = Date.now();
+        saveState(state);
+        renderMessages();
+        setStatus("");
+        
+        // 发送通知
+        this.sendNotification(fullText);
+        
+      } catch (e) {
+        console.error("主动消息生成失败:", e);
+        // 删除失败的消息
+        const msgIdx = state.messagesByChatId[chatId].findIndex(m => m.id === assistantMsgId);
+        if (msgIdx !== -1) {
+          state.messagesByChatId[chatId].splice(msgIdx, 1);
+        }
+        renderMessages();
+        setStatus("");
+      }
+    },
+    
+    sendNotification(text) {
+      if (!("Notification" in window)) return;
+      
+      if (Notification.permission === "granted") {
+        new Notification("💬 收到新消息", {
+          body: text.slice(0, 100) + (text.length > 100 ? "..." : ""),
+          icon: "/favicon.ico",
+          tag: "proactive-message"
+        });
+      } else if (Notification.permission !== "denied") {
+        Notification.requestPermission();
+      }
+    }
+  };
+  
+  // 暴露给外部
+  window.LLMHubProactive = LLMHubProactive;
 
   async function init() {
     initDomRefs();
@@ -5594,9 +5659,6 @@ type: fact, preference, habit, relationship, understanding, self
         }
         
         setTimeout(() => setStatus(""), 2000);
-        
-        // 同步澈的主动消息到对话框
-        syncPendingToChat();
       } else {
         setStatus("⚠️ 服务器连接失败，使用本地数据");
         setTimeout(() => setStatus(""), 3000);
@@ -5638,69 +5700,43 @@ type: fact, preference, habit, relationship, understanding, self
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
         saveState(state);
-      } else {
-        // 页面回到前台时，检查澈有没有新的主动消息
-        syncPendingToChat();
       }
     });
-    // 接收 Service Worker 推送消息，实时显示气泡
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.addEventListener("message", (event) => {
-        if (event.data?.type === "dream-message") {
-          console.log("[Dream] 收到SW推送，同步消息到对话框");
-          syncPendingToChat();
-        }
-      });
-    }
     // 定期自动保存（每30秒）- 只保存配置
     setInterval(() => {
       saveState(state);
     }, 30000);
-    // Web Push 推送注册（延迟执行，不阻塞 UI）
-    setTimeout(async () => {
-      if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
-      try {
-        const swReg = await navigator.serviceWorker.ready;
-        console.log('[Push] Service Worker ready');
-        
-        // 已有权限才继续，不主动弹窗（避免干扰 UI）
-        if (Notification.permission === 'granted') {
-          let subscription = await swReg.pushManager.getSubscription();
-          if (!subscription) {
-            const sm = state.serverMemory || {};
-            if (sm.serverUrl && sm.token) {
-              try {
-                const vapidResp = await fetch(sm.serverUrl.replace(/\/$/, '') + '/api/dream/vapid-public-key');
-                const { publicKey } = await vapidResp.json();
-                subscription = await swReg.pushManager.subscribe({
-                  userVisibleOnly: true,
-                  applicationServerKey: publicKey,
-                });
-                console.log('[Push] 新订阅已创建');
-              } catch (e) {
-                console.warn('[Push] 订阅创建失败:', e);
-              }
-            }
+    
+    // 初始化主动消息系统
+    LLMHubProactive.init();
+    const pcfg = state.proactiveMessage || {};
+    if (pcfg.enabled) {
+      setStatus("💬 主动消息已启动");
+      setTimeout(() => setStatus(""), 3000);
+    }
+    
+    // 暴露手动测试方法（长按标题栏触发）
+    if (els.currentChatTitle) {
+      let pressTimer = null;
+      els.currentChatTitle.addEventListener('touchstart', () => {
+        pressTimer = setTimeout(() => {
+          if (pcfg.enabled) {
+            setStatus("🧪 手动触发主动消息...");
+            LLMHubProactive.trigger("manual");
+          } else {
+            setStatus("⚠️ 主动消息未启用");
+            setTimeout(() => setStatus(""), 2000);
           }
-          if (subscription) {
-            const sm = state.serverMemory || {};
-            if (sm.serverUrl && sm.token) {
-              fetch(sm.serverUrl.replace(/\/$/, '') + '/api/dream/push-subscribe?token=' + encodeURIComponent(sm.token), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(subscription),
-              }).then(() => console.log('[Push] 订阅已同步到后端'))
-                .catch(e => console.warn('[Push] 同步失败:', e));
-            }
-          }
-        } else if (Notification.permission === 'default') {
-          // 权限未决定：等用户第一次发消息时再请求（见 sendMessage）
-          console.log('[Push] 通知权限待请求，将在首次发消息时弹窗');
-        }
-      } catch (e) {
-        console.warn('[Push] 注册失败:', e);
-      }
-    }, 3000);
+        }, 2000); // 长按2秒触发测试
+      });
+      els.currentChatTitle.addEventListener('touchend', () => clearTimeout(pressTimer));
+      els.currentChatTitle.addEventListener('touchcancel', () => clearTimeout(pressTimer));
+    }
+    
+    // 请求通知权限
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
   }
 
   if (document.readyState === "loading") {

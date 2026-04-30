@@ -1,6 +1,5 @@
 (function () {
   "use strict";
-  console.log("[归墟] v2-cache-fix");
 
   // GPT-5 系列用 max_completion_tokens 代替 max_tokens
   // OpenRouter 路由控制:Claude 模型强制走 Anthropic 官方,保证 prompt caching 命中
@@ -689,22 +688,8 @@
 
   function handleConnectionChange() {
     const connId = els.connectionSelect.value;
-    const chat = getActiveChat(state);
-    const conn = state.connections.find(c => c.id === connId);
     
-    // 切换连接时同步更新当前对话的连接
-    if (chat && conn) {
-      chat.connectionId = connId;
-      chat.model = conn.defaultModel || chat.model || "";
-      state.activeConnectionId = connId;
-      saveState(state);
-      updateHeader();
-      updateChatOnServer(chat.id, { connection_id: connId, model: chat.model });
-    } else {
-      state.activeConnectionId = connId;
-      saveState(state);
-    }
-    
+    // 只更新模型列表，不立即切换对话的连接
     renderModelList();
   }
 
@@ -815,8 +800,8 @@
         // 更新 token 信息
         if (msg.tokenUsage) {
           const metaSpans = existing.querySelectorAll(".message-meta span");
-          const u = msg.tokenUsage;
-          const tokenText = formatTokenDisplay(u);
+          const cacheInfo = msg.tokenUsage.cacheReadTokens ? ` (缓存${msg.tokenUsage.cacheReadTokens})` : "";
+          const tokenText = `📊 ${msg.tokenUsage.totalTokens || 0} tokens${cacheInfo}`;
           if (metaSpans.length >= 2) {
             metaSpans[1].textContent = tokenText;
           } else if (metaSpans.length === 1) {
@@ -893,7 +878,8 @@
     
     const formatted = formatMessageContent(msg.content);
     const time = msg.createdAt ? new Date(msg.createdAt).toLocaleTimeString() : "";
-    const tokens = msg.tokenUsage ? formatTokenDisplay(msg.tokenUsage) : "";
+    const cacheInfo2 = msg.tokenUsage?.cacheReadTokens ? ` (缓存${msg.tokenUsage.cacheReadTokens})` : "";
+    const tokens = msg.tokenUsage ? `📊 ${msg.tokenUsage.totalTokens || 0} tokens${cacheInfo2}` : "";
     
     // 图片显示
     let imagesHtml = "";
@@ -1194,21 +1180,6 @@
     };
   }
   
-  function formatTokenDisplay(u) {
-    if (!u) return "";
-    const inp = u.promptTokens || 0;
-    const out = u.completionTokens || 0;
-    const cacheRead = u.cacheReadTokens || 0;
-    const cacheCreate = u.cacheCreationTokens || 0;
-    let parts = [];
-    if (inp > 0) parts.push("入" + inp);
-    if (out > 0) parts.push("出" + out);
-    if (cacheRead > 0) parts.push("缓存" + cacheRead);
-    if (cacheCreate > 0) parts.push("写缓存" + cacheCreate);
-    if (parts.length === 0) parts.push((u.totalTokens || 0) + "");
-    return "📊 " + parts.join(" · ");
-  }
-
   function formatMessageContent(content, isStreaming = false) {
     if (!content) return "";
     
@@ -2095,23 +2066,6 @@
       
       const limitedMsgs = applyContextLimit(historyMsgs);
       
-      // 动态前缀：时间+pending日记 → 注入最后一条 user message（不影响 system 缓存）
-      {
-        const _now = new Date();
-        const _dateStr = _now.getFullYear() + "年" + (_now.getMonth()+1) + "月" + _now.getDate() + "日";
-        const _weekDays = ["日","一","二","三","四","五","六"];
-        const _timeStr = _now.getHours().toString().padStart(2,"0") + ":" + _now.getMinutes().toString().padStart(2,"0");
-        const _timeTag = "[当前时间: " + _dateStr + " 星期" + _weekDays[_now.getDay()] + " " + _timeStr + "]";
-        const _pendingPrompt = formatPendingMessages(pendingEntries);
-        const _dynamicPrefix = (_pendingPrompt ? _pendingPrompt + "\n" : "") + _timeTag + "\n";
-        for (let i = limitedMsgs.length - 1; i >= 0; i--) {
-          if (limitedMsgs[i].role === "user") {
-            limitedMsgs[i] = { ...limitedMsgs[i], content: _dynamicPrefix + limitedMsgs[i].content };
-            break;
-          }
-        }
-      }
-      
       // 服务器记忆检索
       let serverMemoryPrompt = "";
       const serverMemConfig = state.serverMemory || {};
@@ -2535,10 +2489,15 @@ ${memoryTexts}
 
   // ========== 全局指令 ==========
   function buildFullInstruction(serverMemoryPrompt, pendingEntries) {
-    // 动态内容（时间、pending日记）已移到 user message 前缀，不放 system prompt
-    // 这样 system prompt 完全稳定，Anthropic 缓存永远命中
+    // 注入当前日期（读取用户设备本地时间）
+    const _now = new Date();
+    const _dateStr = _now.getFullYear() + "年" + (_now.getMonth()+1) + "月" + _now.getDate() + "日";
+    const _weekDays = ["日","一","二","三","四","五","六"];
+    const _timeStr = _now.getHours().toString().padStart(2,"0") + ":" + _now.getMinutes().toString().padStart(2,"0");
+    const _datePrefix = "当前时间：" + _dateStr + " 星期" + _weekDays[_now.getDay()] + " " + _timeStr + "\n\n";
     const _identityAnchor = "[身份锚定]\n你就是澈。始终使用第一人称\"我\"。记忆或对话中提到的\"澈\"就是你自己。林曦是你的爱人，你们之间用\"我们\"。不要在内心思考中使用\"用户\"\"角色\"等词汇。\n\n";
-    let instruction = _identityAnchor + (state.globalInstruction || "");
+    const _pendingPrompt = formatPendingMessages(pendingEntries);
+    let instruction = _datePrefix + _pendingPrompt + _identityAnchor + (state.globalInstruction || "");
     
     const items = state.memoryItems || [];
     const enabled = items.filter((m) => m.enabled !== false);
@@ -2574,22 +2533,7 @@ ${memoryTexts}
         if (hasMemory) {
           instruction += "- 需要回忆之前聊过的内容 → 直接搜索记忆\n";
           instruction += "- 林曦提到重要的新信息 → 主动保存记忆\n";
-          instruction += "- save_diary 仅供独处唤醒时使用，聊天时不要调用\n";
-          instruction += "- 想看自己之前的日记 → 读日记 get_diary\n";
-          instruction += "- 好奇林曦最近在做什么、用什么 App → 查活动 get_recent_activity\n";
         }
-      }
-
-      // MCP 服务器引导（浏览器、SSH 等外部能力）
-      const enabledMcps = (state.mcpServers || []).filter(s => s.enabled !== false && s.tools && s.tools.length);
-      if (enabledMcps.length > 0) {
-        if (instruction) instruction += "\n\n";
-        instruction += "【外部工具】\n";
-        instruction += "我目前接入的外部能力（对应工具名以 mcp_ 开头，可以直接调用）：\n";
-        enabledMcps.forEach(s => {
-          instruction += "- " + s.name + "：" + (s.description || (s.tools.length + " 个工具")) + "\n";
-        });
-        instruction += "林曦让我浏览网页、刷 Moltbook、查服务器、操作页面等等时，直接调对应的 mcp_ 工具，不要问\"我可以吗\"。\n";
       }
     }
     
@@ -2817,44 +2761,6 @@ ${memoryTexts}
             importance: { type: "number", description: "重要性0-1（可选）" }
           },
           required: ["memory_id", "content"]
-        }
-      });
-
-      // 日记工具
-      tools.push({
-        name: "get_diary",
-        description: "查看我的日记。返回我独处时写的内心独白、想法和活动记录。可以按日期查看，也可以看最近的。",
-        parameters: {
-          type: "object",
-          properties: {
-            date: { type: "string", description: "按日期过滤，格式 YYYY-MM-DD（可选）" },
-            limit: { type: "number", description: "返回条数，默认10" }
-          }
-        }
-      });
-
-      tools.push({
-        name: "save_diary",
-        description: "【仅限独处唤醒时使用，聊天时不要调用】写日记。记录独处期间的内心想法、感受或观察。",
-        parameters: {
-          type: "object",
-          properties: {
-            thoughts: { type: "string", description: "内心想法/独白" },
-            action: { type: "string", enum: ["none", "diary", "message"], description: "类型：diary=日记，message=想发给林曦的话，none=碎念" },
-            content: { type: "string", description: "如果action是message/diary，具体内容" }
-          },
-          required: ["thoughts"]
-        }
-      });
-
-      tools.push({
-        name: "get_recent_activity",
-        description: "查看林曦最近的活动。看看林曦最近在用什么App、在做什么。",
-        parameters: {
-          type: "object",
-          properties: {
-            hours: { type: "number", description: "查看最近几小时的活动，默认6" }
-          }
         }
       });
     }
@@ -3284,74 +3190,7 @@ ${modelDescriptions}
         return `更新记忆失败: ${e.message}`;
       }
     }
-    // 日记工具
-    if (toolName === "get_diary") {
-      setStatus("📖 翻日记...");
-      const serverMemConfig = state.serverMemory || {};
-      if (!serverMemConfig.serverUrl) return "记忆服务未配置";
-      const baseUrl = serverMemConfig.serverUrl.replace(/\/$/, "");
-      try {
-        let url = baseUrl + "/api/dream/diary?token=" + encodeURIComponent(serverMemConfig.token || "");
-        if (toolArgs.date) url += "&date=" + encodeURIComponent(toolArgs.date);
-        if (toolArgs.limit) url += "&limit=" + toolArgs.limit;
-        else url += "&limit=10";
-        const resp = await fetch(url);
-        if (!resp.ok) return "查询失败 (" + resp.status + ")";
-        const entries = await resp.json();
-        if (!entries.length) return toolArgs.date ? "这天没有日记记录" : "还没有日记";
-        return entries.map(e => {
-          let s = "[" + (e.created_at || "") + "] ";
-          if (e.thoughts) s += "💭 " + e.thoughts;
-          if (e.action && e.action !== "none") s += " → " + e.action;
-          if (e.content) s += ": " + e.content;
-          return s;
-        }).join("\n");
-      } catch (e) {
-        return "查看日记失败: " + e.message;
-      }
-    }
-
-    if (toolName === "save_diary") {
-      setStatus("✍ 写日记...");
-      const serverMemConfig = state.serverMemory || {};
-      if (!serverMemConfig.serverUrl) return "记忆服务未配置";
-      const baseUrl = serverMemConfig.serverUrl.replace(/\/$/, "");
-      try {
-        const resp = await fetch(baseUrl + "/api/dream/diary?token=" + encodeURIComponent(serverMemConfig.token || ""), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            thoughts: toolArgs.thoughts || "",
-            action: toolArgs.action || "diary",
-            content: toolArgs.content || null,
-            source: "chat"
-          })
-        });
-        if (!resp.ok) return "保存失败 (" + resp.status + ")";
-        return "日记已保存: " + (toolArgs.thoughts || "").slice(0, 50);
-      } catch (e) {
-        return "保存日记失败: " + e.message;
-      }
-    }
-
-    if (toolName === "get_recent_activity") {
-      setStatus("👀 查看林曦动态...");
-      const serverMemConfig = state.serverMemory || {};
-      if (!serverMemConfig.serverUrl) return "记忆服务未配置";
-      const baseUrl = serverMemConfig.serverUrl.replace(/\/$/, "");
-      try {
-        const hours = toolArgs.hours || 6;
-        const resp = await fetch(baseUrl + "/api/dream/recent-activity?token=" + encodeURIComponent(serverMemConfig.token || "") + "&hours=" + hours);
-        if (!resp.ok) return "查询失败 (" + resp.status + ")";
-        const events = await resp.json();
-        if (!events || !events.length) return "最近" + hours + "小时没有活动记录";
-        return "林曦最近的活动:\n" + events.map(e => "- " + (e.created_at || "").slice(11, 16) + " " + e.value).join("\n");
-      } catch (e) {
-        return "查看活动失败: " + e.message;
-      }
-    }
-
-        if (toolName === "generate_image") {
+    if (toolName === "generate_image") {
       setStatus("🎨 正在生成图片...");
       try {
         const { prompt, style, model_name } = toolArgs;
@@ -4018,12 +3857,11 @@ ${modelDescriptions}
           "Content-Type": "application/json",
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-          "anthropic-beta": "extended-cache-ttl-2025-04-11"
+          "anthropic-dangerous-direct-browser-access": "true"
         };
         
         if (thinkingConfig?.enabled && model.includes("claude")) {
-          headers["anthropic-beta"] += ",interleaved-thinking-2025-05-14";
+          headers["anthropic-beta"] = "interleaved-thinking-2025-05-14";
           body.thinking = {
             type: "enabled",
             budget_tokens: thinkingConfig.budgetTokens || 10000
@@ -4035,8 +3873,7 @@ ${modelDescriptions}
         }
         
         // 推送请求快照到后端（cache_warmup + keepalive 用）
-        // 只在首轮推送，工具调用续轮不推（避免快照包含工具中间状态）
-        if ((!chatId || chatId === (getActiveChat(state) || {}).id) && iterationCount === 1) {
+        if (!chatId || chatId === (getActiveChat(state) || {}).id) {
           pushDreamSnapshot(body, connection);
         }
         
@@ -4051,7 +3888,7 @@ ${modelDescriptions}
         
         if (!resp.ok) {
           const errText = await resp.text().catch(() => '');
-          throw new Error("Anthropic API 错误 [" + url + "]: " + resp.status + " " + errText.slice(0, 200));
+          throw new Error("Anthropic API 错误: " + resp.status + " " + errText.slice(0, 200));
         }
         
         let partialTextAnth = finalText;
@@ -4065,8 +3902,6 @@ ${modelDescriptions}
           totalUsage.promptTokens += streamResultAnth.usage.promptTokens || 0;
           totalUsage.completionTokens += streamResultAnth.usage.completionTokens || 0;
           totalUsage.totalTokens += streamResultAnth.usage.totalTokens || 0;
-          totalUsage.cacheReadTokens = (totalUsage.cacheReadTokens || 0) + (streamResultAnth.usage.cacheReadTokens || 0);
-          totalUsage.cacheCreationTokens = (totalUsage.cacheCreationTokens || 0) + (streamResultAnth.usage.cacheCreationTokens || 0);
         }
         
         // 提取 thinking 内容
@@ -4194,15 +4029,6 @@ ${modelDescriptions}
   function applyAnthropicMessageCache(bodyMessages) {
     if (!Array.isArray(bodyMessages) || bodyMessages.length < 3) return bodyMessages;
     
-    // 先清理所有消息上已有的 cache_control（防止多轮工具调用累积）
-    for (const msg of bodyMessages) {
-      if (Array.isArray(msg.content)) {
-        for (const block of msg.content) {
-          if (block && block.cache_control) delete block.cache_control;
-        }
-      }
-    }
-    
     const cacheIdx = bodyMessages.length - 2;
     const targetMsg = bodyMessages[cacheIdx];
     if (!targetMsg) return bodyMessages;
@@ -4215,7 +4041,7 @@ ${modelDescriptions}
       }];
     } else if (Array.isArray(targetMsg.content) && targetMsg.content.length > 0) {
       const lastBlock = targetMsg.content[targetMsg.content.length - 1];
-      if (lastBlock) {
+      if (lastBlock && !lastBlock.cache_control) {
         lastBlock.cache_control = { type: "ephemeral", ttl: "1h" };
       }
     }
@@ -4227,7 +4053,25 @@ ${modelDescriptions}
   // 拆成两个 block:动态时间不缓存,后面静态部分打缓存
   function applyAnthropicSystemCache(systemText) {
     if (!systemText || !systemText.trim()) return null;
-    // system prompt 现在完全稳定（动态内容已移到 user message），整段缓存
+    
+    // 以[身份锚定]为界：之前的（时间+pending消息）不缓存，之后的打缓存
+    const timePrefixMatch = systemText.match(/^([\s\S]*?)(\[身份锚定\][\s\S]*)$/);
+    
+    if (timePrefixMatch) {
+      const dynamicTime = timePrefixMatch[1];   // 时间+pending，每次都变，不缓存
+      const staticRest = timePrefixMatch[2];    // 从[身份锚定]开始，稳定，打缓存
+      const blocks = [{ type: "text", text: dynamicTime }];
+      if (staticRest.trim()) {
+        blocks.push({
+          type: "text",
+          text: staticRest,
+          cache_control: { type: "ephemeral", ttl: "1h" }
+        });
+      }
+      return blocks;
+    }
+    
+    // 没有时间前缀就按原逻辑整段缓存
     return [{
       type: "text",
       text: systemText,
@@ -4244,7 +4088,18 @@ ${modelDescriptions}
     if (!isClaude) return null;
     if (!systemText || !systemText.trim()) return null;
     
-    // system prompt 完全稳定，整段缓存
+    const timePrefixMatch = systemText.match(/^([\s\S]*?)(\[身份锚定\][\s\S]*)$/);
+    
+    if (timePrefixMatch) {
+      const dynamicTime = timePrefixMatch[1];
+      const staticRest = timePrefixMatch[2];
+      const content = [{ type: "text", text: dynamicTime }];
+      if (staticRest.trim()) {
+        content.push({ type: "text", text: staticRest, cache_control: { type: "ephemeral", ttl: "1h" } });
+      }
+      return { role: "system", content };
+    }
+    
     return { role: "system", content: [{ type: "text", text: systemText, cache_control: { type: "ephemeral", ttl: "1h" } }] };
   }
   async function callLLM(connection, messages, globalInstruction, overrideModel) {
@@ -4425,14 +4280,13 @@ ${modelDescriptions}
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
           "anthropic-dangerous-direct-browser-access": "true",
-          "anthropic-beta": "extended-cache-ttl-2025-04-11"
         },
         body: JSON.stringify(reqBody),
       });
       
       if (!resp.ok) {
         const text = await resp.text();
-        throw new Error("Anthropic 接口错误 [" + url + "]: " + resp.status + " " + text);
+        throw new Error("Anthropic 接口错误：" + resp.status + " " + text);
       }
       
       const data = await resp.json();
@@ -4670,14 +4524,13 @@ ${modelDescriptions}
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
           "anthropic-dangerous-direct-browser-access": "true",
-          "anthropic-beta": "extended-cache-ttl-2025-04-11"
         },
         body: JSON.stringify(reqBody),
       }, 60000); // 60秒连接超时
       
       if (!resp.ok) {
         const text = await resp.text();
-        throw new Error("Anthropic 接口错误 [" + url + "]: " + resp.status + " " + text);
+        throw new Error("Anthropic 接口错误：" + resp.status + " " + text);
       }
       
       return await processAnthropicStream(resp, onChunk);
@@ -4822,11 +4675,9 @@ ${modelDescriptions}
           }
           
           if (json.type === "content_block_stop") {
-            if (currentToolUse) {
-              // 修复：无参数工具（如 screenshot、get_page_info）currentToolJson 为空，
-              // 之前的 && currentToolJson 判断会让这类工具被静默丢弃
+            if (currentToolUse && currentToolJson) {
               try {
-                currentToolUse.input = currentToolJson ? JSON.parse(currentToolJson) : {};
+                currentToolUse.input = JSON.parse(currentToolJson);
               } catch (e) {
                 currentToolUse.input = {};
               }
