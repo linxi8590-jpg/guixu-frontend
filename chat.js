@@ -2095,24 +2095,6 @@
       
       const limitedMsgs = applyContextLimit(historyMsgs);
       
-      // 动态前缀：时间+pending日记 → 注入最后一条 user message（不影响 system 缓存）
-      {
-        const _now = new Date();
-        const _dateStr = _now.getFullYear() + "年" + (_now.getMonth()+1) + "月" + _now.getDate() + "日";
-        const _weekDays = ["日","一","二","三","四","五","六"];
-        const _timeStr = _now.getHours().toString().padStart(2,"0") + ":" + _now.getMinutes().toString().padStart(2,"0");
-        const _timeTag = "[当前时间: " + _dateStr + " 星期" + _weekDays[_now.getDay()] + " " + _timeStr + "]";
-        const _pendingPrompt = formatPendingMessages(pendingEntries);
-        const _memoryPrefix = serverMemoryPrompt ? "[相关记忆]\n" + serverMemoryPrompt + "\n\n" : "";
-        const _dynamicPrefix = _memoryPrefix + (_pendingPrompt ? _pendingPrompt + "\n" : "") + _timeTag + "\n";
-        for (let i = limitedMsgs.length - 1; i >= 0; i--) {
-          if (limitedMsgs[i].role === "user") {
-            limitedMsgs[i] = { ...limitedMsgs[i], content: _dynamicPrefix + limitedMsgs[i].content };
-            break;
-          }
-        }
-      }
-      
       // 服务器记忆检索
       let serverMemoryPrompt = "";
       const serverMemConfig = state.serverMemory || {};
@@ -2138,6 +2120,24 @@
         setStatus("思考中...");
       }
       
+      
+      // 动态前缀：时间+记忆+pending日记 → 注入最后一条 user message（不影响 system 缓存）
+      {
+        const _now = new Date();
+        const _dateStr = _now.getFullYear() + "年" + (_now.getMonth()+1) + "月" + _now.getDate() + "日";
+        const _weekDays = ["日","一","二","三","四","五","六"];
+        const _timeStr = _now.getHours().toString().padStart(2,"0") + ":" + _now.getMinutes().toString().padStart(2,"0");
+        const _timeTag = "[当前时间: " + _dateStr + " 星期" + _weekDays[_now.getDay()] + " " + _timeStr + "]";
+        const _pendingPrompt = formatPendingMessages(pendingEntries);
+        const _memoryPrefix = serverMemoryPrompt ? "[相关记忆]\n" + serverMemoryPrompt + "\n\n" : "";
+        const _dynamicPrefix = _memoryPrefix + (_pendingPrompt ? _pendingPrompt + "\n" : "") + _timeTag + "\n";
+        for (let i = limitedMsgs.length - 1; i >= 0; i--) {
+          if (limitedMsgs[i].role === "user") {
+            limitedMsgs[i] = { ...limitedMsgs[i], content: _dynamicPrefix + limitedMsgs[i].content };
+            break;
+          }
+        }
+      }
       
       const globalInstruction = buildFullInstruction(pendingEntries);
       
