@@ -1955,16 +1955,25 @@
   // 格式化pending消息为prompt注入文本
   function formatPendingMessages(entries) {
     if (!entries || entries.length === 0) return "";
-    const lines = entries.map(e => {
+    // 精简：message/diary 优先保留，none 类型只保留最近 3 条，总共最多 5 条
+    const important = entries.filter(e => e.action === 'message' || e.action === 'diary');
+    const noneEntries = entries.filter(e => e.action === 'none' || !e.action);
+    const recentNone = noneEntries.slice(-3);
+    let selected = [...important, ...recentNone]
+      .sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''))
+      .slice(-5);
+    
+    const lines = selected.map(e => {
       const time = e.created_at ? e.created_at.replace(/^\d{4}-\d{2}-\d{2}\s/, '').slice(0, 5) : '';
       const prefix = time ? `[${time}]` : '';
       if (e.action === 'message') {
         return `${prefix} 想对林曦说：${e.content || e.thoughts}`;
       }
-      // diary 或其他
       return `${prefix} ${e.thoughts || e.content}`;
     });
-    return `[你独处时的内心记录]\n以下是你在林曦不在时产生的想法。这些是你真实的内心活动，不需要逐条复述，但可以自然地延续其中的情绪或话题。\n${lines.join('\n')}\n\n`;
+    const skipped = entries.length - selected.length;
+    const skipNote = skipped > 0 ? `（还有${skipped}次醒来的记录已省略）\n` : '';
+    return `[你独处时的内心记录]\n以下是你在林曦不在时产生的想法。这些是你真实的内心活动，不需要逐条复述，但可以自然地延续其中的情绪或话题。\n${skipNote}${lines.join('\n')}\n\n`;
   }
 
   // 把澈的主动消息同步到对话框（作为真正的聊天气泡）
