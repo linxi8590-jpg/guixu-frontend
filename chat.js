@@ -4239,10 +4239,10 @@ ${modelDescriptions}
     if (target) {
       if (Array.isArray(target.content) && target.content.length > 0) {
         const lastBlock = target.content[target.content.length - 1];
-        if (lastBlock && typeof lastBlock === 'object') {
+        if (lastBlock && typeof lastBlock === 'object' && lastBlock.text) {
           lastBlock.cache_control = { type: "ephemeral", ttl: "1h" };
         }
-      } else if (typeof target.content === 'string') {
+      } else if (typeof target.content === 'string' && target.content.trim()) {
         target.content = [{ type: "text", text: target.content, cache_control: { type: "ephemeral", ttl: "1h" } }];
       }
     }
